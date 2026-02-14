@@ -88,6 +88,10 @@ typedef struct {
     VkDescriptorSetLayout    geo_desc_set_layout;
     VkDescriptorPool         geo_desc_pool;
 
+    /* 1x1 white dummy texture — bound for untextured draws to satisfy descriptor set 0 */
+    VulkanTexture            dummy_texture;
+    VkDescriptorSet          dummy_desc_set;
+
     /* Clear color (set by game, used in render pass begin) */
     float                    clear_color[4]; /* r, g, b, a */
 

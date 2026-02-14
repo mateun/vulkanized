@@ -128,13 +128,14 @@ static EngineResult record_command_buffer(VulkanContext *vk, VkCommandBuffer cmd
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                                0, 68, &push_data);
 
-            /* Bind texture descriptor if textured */
+            /* Bind texture descriptor (real texture or dummy for untextured) */
+            VkDescriptorSet desc_set = vk->dummy_desc_set;
             if (dc->texture != TEXTURE_HANDLE_INVALID && dc->texture < vk->texture_count) {
-                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                         vk->pipeline_layout, 0, 1,
-                                         &vk->texture_desc_sets[dc->texture],
-                                         0, NULL);
+                desc_set = vk->texture_desc_sets[dc->texture];
             }
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                     vk->pipeline_layout, 0, 1,
+                                     &desc_set, 0, NULL);
 
             vkCmdDraw(cmd,
                       mesh->vertex_count,   /* vertexCount */
@@ -261,6 +262,43 @@ EngineResult renderer_create(Window *window, const RendererConfig *config,
         }
     }
 
+    /* 1x1 white dummy texture — bound for untextured draws so the descriptor
+     * set 0 (sampler) is always valid, even when the shader doesn't sample it. */
+    {
+        u8 white_pixel[] = { 255, 255, 255, 255 };
+        res = vk_create_texture(&r->vk, white_pixel, 1, 1,
+                                VK_FORMAT_R8G8B8A8_SRGB, &r->vk.dummy_texture);
+        if (res != ENGINE_SUCCESS) goto fail;
+
+        VkDescriptorSetAllocateInfo alloc_info = {
+            .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool     = r->vk.geo_desc_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts        = &r->vk.geo_desc_set_layout,
+        };
+        if (vkAllocateDescriptorSets(r->vk.device, &alloc_info,
+                                      &r->vk.dummy_desc_set) != VK_SUCCESS) {
+            LOG_FATAL("Failed to allocate dummy descriptor set");
+            res = ENGINE_ERROR_VULKAN_INIT;
+            goto fail;
+        }
+
+        VkDescriptorImageInfo img_info = {
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            .imageView   = r->vk.dummy_texture.view,
+            .sampler     = r->vk.dummy_texture.sampler,
+        };
+        VkWriteDescriptorSet write = {
+            .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet          = r->vk.dummy_desc_set,
+            .dstBinding      = 0,
+            .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .descriptorCount = 1,
+            .pImageInfo      = &img_info,
+        };
+        vkUpdateDescriptorSets(r->vk.device, 1, &write, 0, NULL);
+    }
+
     if ((res = vk_create_command_buffers(&r->vk))    != ENGINE_SUCCESS) goto fail;
     if ((res = vk_create_sync_objects(&r->vk))       != ENGINE_SUCCESS) goto fail;
 
@@ -293,6 +331,7 @@ void renderer_destroy(Renderer *renderer) {
         for (u32 i = 0; i < vk->texture_count; i++) {
             vk_destroy_texture(vk, &vk->textures[i]);
         }
+        vk_destroy_texture(vk, &vk->dummy_texture);
 
         text_shutdown(vk);
         vk_destroy(vk);

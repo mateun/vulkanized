@@ -54,9 +54,13 @@ int main(void) {
         return 1;
     }
 
+    // Load some textures:
+    TextureHandle  heroTexture;
+    renderer_load_texture(renderer, "assets/blob.png", &heroTexture);
+
     Camera2D *camera = (Camera2D *)calloc(1, sizeof(Camera2D));
-    camera->zoom        = 1.0f;
-    camera->half_height = 50.0f;
+    camera->zoom        = 2.0f;
+    camera->half_height = 30.0f;
 
     /* ---- Upload meshes ---- */
 
@@ -106,9 +110,9 @@ int main(void) {
         enemies[i].rotation    = ((f32)rand() / RAND_MAX) * 6.2831853f;
         enemies[i].scale[0]    = 2.0f;
         enemies[i].scale[1]    = 2.0f;
-        enemies[i].color[0]    = 0.5f;
-        enemies[i].color[1]    = 0.0f;
-        enemies[i].color[2]    = 0.0f;
+        enemies[i].color[0]    = 1.0f;
+        enemies[i].color[1]    = 1.0f;
+        enemies[i].color[2]    = 1.0f;
     }
 
     /* Player (triangle, white) */
@@ -149,7 +153,7 @@ int main(void) {
         renderer_set_camera(renderer, camera);
 
         /* Draw enemies (quads) and player (triangle) */
-        renderer_draw_mesh(renderer, mesh_quad, enemies, NUM_ENEMIES);
+        renderer_draw_mesh_textured(renderer, mesh_quad, heroTexture, enemies, NUM_ENEMIES);
         renderer_draw_mesh(renderer, mesh_triangle, &player, 1);
 
         /* Title text */
