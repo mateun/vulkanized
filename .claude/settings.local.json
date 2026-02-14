@@ -17,7 +17,9 @@
       "Bash(/d/Programs/cmake/bin/cmake.exe --build:*)",
       "Bash(/d/Programs/cmake/bin/cmake.exe:*)",
       "Bash(timeout 3 ./shmup.exe:*)",
-      "Bash(timeout:*)"
+      "Bash(timeout:*)",
+      "Bash(cl:*)",
+      "Bash(python:*)"
     ]
   }
 }

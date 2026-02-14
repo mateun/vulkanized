@@ -49,6 +49,9 @@ set(ENGINE_SOURCES
     src/renderer/text.c
     src/renderer/bloom.c
     src/renderer/stb_impl.c
+    src/gameplay/collision.c
+    src/gameplay/particles.c
+    src/audio/audio.c
 )
 
 add_library(engine STATIC ${ENGINE_SOURCES})

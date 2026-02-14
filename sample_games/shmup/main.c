@@ -3,6 +3,9 @@
 #include "platform/window.h"
 #include "platform/input.h"
 #include "renderer/renderer.h"
+#include "gameplay/collision.h"
+#include "gameplay/particles.h"
+#include "audio/audio.h"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -10,13 +13,18 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
+#include <time.h> 
 
-#define NUM_ENEMIES  29
-#define MAX_BULLETS  64
-#define BULLET_SPEED 25.0f
-#define SHIP_SPEED   15.0f
-#define TRAIL_LENGTH 12       /* number of ghost afterimages */
+#define MAX_ENEMIES    29
+#define MAX_BULLETS    64
+#define MAX_HIT_PAIRS  64
+#define BULLET_SPEED   25.0f
+#define SHIP_SPEED     15.0f
+#define TRAIL_LENGTH   12       /* number of ghost afterimages */
+#define ENEMY_RADIUS   0.8f     /* collision radius for enemies (scale 2 × half-extent 0.5 × ~0.8) */
+#define BULLET_RADIUS  0.15f    /* collision radius for bullets (tiny) */
+#define PLAYER_RADIUS  0.7f     /* collision radius for player ship */
+#define MAX_PARTICLES  1024     /* particle budget for explosions */
 
 int main(void) {
     /* ---- Init logging ---- */
@@ -56,6 +64,23 @@ int main(void) {
         LOG_FATAL("Failed to create renderer");
         window_destroy(window);
         return 1;
+    }
+
+    /* ---- Create audio engine ---- */
+    AudioEngine *audio = NULL;
+    if (audio_init(&audio) != ENGINE_SUCCESS) {
+        LOG_WARN("Failed to init audio — continuing without sound");
+    }
+
+    /* Load sound effects */
+    SoundHandle snd_shoot     = {0};
+    SoundHandle snd_explosion = {0};
+    bool has_audio = (audio != NULL);
+    if (has_audio) {
+        if (audio_load_sound(audio, "assets/shoot.wav", &snd_shoot) != ENGINE_SUCCESS)
+            LOG_WARN("Could not load shoot.wav");
+        if (audio_load_sound(audio, "assets/explosion.wav", &snd_explosion) != ENGINE_SUCCESS)
+            LOG_WARN("Could not load explosion.wav");
     }
 
     // Load some textures:
@@ -140,8 +165,9 @@ int main(void) {
     static const int num_neon = sizeof(neon_colors) / sizeof(neon_colors[0]);
 
     /* Enemies (quads) — each gets a random neon color */
-    InstanceData enemies[NUM_ENEMIES];
-    for (int i = 0; i < NUM_ENEMIES; i++) {
+    InstanceData enemies[MAX_ENEMIES];
+    int num_enemies = MAX_ENEMIES;
+    for (int i = 0; i < num_enemies; i++) {
         enemies[i].position[0] = ((f32)rand() / RAND_MAX) * 30.0f - 15.0f;
         enemies[i].position[1] = ((f32)rand() / RAND_MAX) * 16.0f - 8.0f;
         enemies[i].rotation    = ((f32)rand() / RAND_MAX) * 6.2831853f;
@@ -161,9 +187,15 @@ int main(void) {
         .color    = { 0.2f, 1.8f, 2.0f },
     };
 
+    /* ---- Game state ---- */
+    i32 score = 0;
+    bool player_hit = false;
+    f32  hit_flash_timer = 0.0f;  /* brief flash on player hit */
+
     /* ---- Bullet pool ---- */
     InstanceData bullets[MAX_BULLETS];
     int num_bullets = 0;
+    CollisionPair hit_pairs[MAX_HIT_PAIRS];
 
     /* ---- Ghost trail ring buffer ---- */
     f32 trail_pos[TRAIL_LENGTH][2];  /* recorded positions */
@@ -177,6 +209,11 @@ int main(void) {
         trail_pos[i][1] = player.position[1];
     }
     InstanceData trail_instances[TRAIL_LENGTH];
+
+    /* ---- Particle pool ---- */
+    Particle particles[MAX_PARTICLES];
+    i32 num_particles = 0;
+    InstanceData particle_instances[MAX_PARTICLES];
 
     /* ---- Main loop ---- */
     LOG_INFO("Entering main loop");
@@ -222,6 +259,7 @@ int main(void) {
             b->color[0]    = 2.5f;   /* bright yellow-white HDR glow */
             b->color[1]    = 2.0f;
             b->color[2]    = 0.5f;
+            if (has_audio) audio_play_sound(audio, snd_shoot, false, 0.5f);
         }
 
         /* Move bullets upward, remove ones that go off screen */
@@ -235,6 +273,90 @@ int main(void) {
             }
         }
 
+        /* ---- Collision: bullets vs enemies ---- */
+        {
+            i32 num_hits = collision_instances_vs_instances(
+                bullets, num_bullets, BULLET_RADIUS,
+                enemies, num_enemies, ENEMY_RADIUS,
+                hit_pairs, MAX_HIT_PAIRS);
+
+            /* Mark hit bullets and enemies for removal (flag with NaN position) */
+            bool bullet_dead[MAX_BULLETS] = {false};
+            bool enemy_dead[MAX_ENEMIES]  = {false};
+            for (i32 h = 0; h < num_hits; h++) {
+                bullet_dead[hit_pairs[h].index_a] = true;
+                enemy_dead[hit_pairs[h].index_b]  = true;
+                score += 100;
+            }
+
+            /* Spawn explosions at dead enemies, then swap-remove them */
+            for (int i = num_enemies - 1; i >= 0; i--) {
+                if (enemy_dead[i]) {
+                    ParticleEmitter explosion = {
+                        .position = { enemies[i].position[0], enemies[i].position[1] },
+                        .color    = { enemies[i].color[0], enemies[i].color[1], enemies[i].color[2] },
+                        .count              = 24,
+                        .speed_min          = 3.0f,
+                        .speed_max          = 10.0f,
+                        .lifetime_min       = 0.3f,
+                        .lifetime_max       = 0.8f,
+                        .scale              = 0.4f,
+                        .angular_velocity_min = -5.0f,
+                        .angular_velocity_max =  5.0f,
+                    };
+                    i32 emitted = particles_emit(&explosion, particles, num_particles, MAX_PARTICLES);
+                    num_particles += emitted;
+
+                    if (has_audio) audio_play_sound(audio, snd_explosion, false, 0.7f);
+
+                    enemies[i] = enemies[--num_enemies];
+                }
+            }
+
+            /* Swap-remove dead bullets */
+            for (int i = num_bullets - 1; i >= 0; i--) {
+                if (bullet_dead[i]) {
+                    bullets[i] = bullets[--num_bullets];
+                }
+            }
+        }
+
+        /* ---- Collision: enemies vs player ---- */
+        if (!player_hit) {
+            i32 hit_idx = collision_circle_vs_instances(
+                player.position[0], player.position[1], PLAYER_RADIUS,
+                enemies, num_enemies, ENEMY_RADIUS);
+
+            if (hit_idx >= 0) {
+                player_hit = true;
+                hit_flash_timer = 0.5f; /* flash for 0.5 seconds */
+                LOG_INFO("Player hit by enemy %d!", hit_idx);
+            }
+        }
+
+        /* Flash timer countdown */
+        if (hit_flash_timer > 0.0f) {
+            hit_flash_timer -= delta_time;
+            if (hit_flash_timer <= 0.0f) {
+                hit_flash_timer = 0.0f;
+                player_hit = false;
+                /* Restore player color */
+                player.color[0] = 0.2f;
+                player.color[1] = 1.8f;
+                player.color[2] = 2.0f;
+            } else {
+                /* Flash red/white */
+                f32 flash = (hit_flash_timer * 10.0f);
+                int blink = (int)flash % 2;
+                player.color[0] = blink ? 3.0f : 0.5f;
+                player.color[1] = blink ? 0.3f : 0.5f;
+                player.color[2] = blink ? 0.3f : 0.5f;
+            }
+        }
+
+        /* Update particles */
+        num_particles = particles_update(particles, num_particles, delta_time);
+
         /* Handle resize */
         if (window_was_resized(window)) {
             window_reset_resized(window);
@@ -242,7 +364,7 @@ int main(void) {
         }
 
         /* Spin enemies */
-        for (int i = 0; i < NUM_ENEMIES; i++) {
+        for (int i = 0; i < num_enemies; i++) {
             enemies[i].rotation += 1.5f * delta_time; /* ~90 deg/sec */
         }
 
@@ -288,10 +410,21 @@ int main(void) {
         if (trail_draw_count > 0) {
             renderer_draw_mesh(renderer, mesh_triangle, trail_instances, (u32)trail_draw_count);
         }
-        renderer_draw_mesh_textured(renderer, mesh_quad, heroTexture, enemies, NUM_ENEMIES);
+        if (num_enemies > 0) {
+            renderer_draw_mesh_textured(renderer, mesh_quad, heroTexture, enemies, (u32)num_enemies);
+        }
         renderer_draw_mesh(renderer, mesh_triangle, &player, 1);
         if (num_bullets > 0) {
             renderer_draw_mesh(renderer, mesh_bullet, bullets, (u32)num_bullets);
+        }
+
+        /* Particles (explosions) */
+        if (num_particles > 0) {
+            i32 num_p_inst = particles_to_instances(particles, num_particles,
+                                                    particle_instances, MAX_PARTICLES);
+            if (num_p_inst > 0) {
+                renderer_draw_mesh(renderer, mesh_quad, particle_instances, (u32)num_p_inst);
+            }
         }
 
         /* Title text */
@@ -300,7 +433,6 @@ int main(void) {
 
         // Render score
         {
-            int32_t score = 849789;
             char ft_buf[32];
             snprintf(ft_buf, sizeof(ft_buf), "%d", score);
 
@@ -345,6 +477,7 @@ int main(void) {
 
     /* ---- Cleanup ---- */
     LOG_INFO("Shutting down...");
+    if (has_audio) audio_shutdown(audio);
     renderer_destroy(renderer);
     window_destroy(window);
 
