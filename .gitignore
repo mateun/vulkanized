@@ -1,0 +1,38 @@
+# Build outputs
+build/
+cmake-build-*/
+out/
+
+# IDE — CLion / IntelliJ
+.idea/
+
+# IDE — Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Compiled objects & libraries
+*.obj
+*.o
+*.lib
+*.a
+*.dll
+*.so
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# SPIR-V compiled shaders (regenerated from GLSL sources)
+*.spv
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Vulkan SDK crash dumps
+*.dmp

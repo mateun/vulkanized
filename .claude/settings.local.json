@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(reg query \"HKLM\\\\SOFTWARE\\\\LunarG\\\\VulkanSDK\")",
+      "Bash(where:*)",
+      "Bash(reg query:*)",
+      "Bash(findstr:*)",
+      "Bash(cmake:*)",
+      "Bash(D:\\\\Programs\\\\VulkanSDK\\\\Bin\\\\glslc.exe:*)",
+      "Bash(glslc:*)",
+      "Bash(ls:*)",
+      "Bash(curl:*)",
+      "Bash(\"D:\\\\Programs\\\\cmake\\\\bin\\\\cmake.exe\" --build build --config Debug)",
+      "Bash(\"D:\\\\Programs\\\\cmake\\\\bin\\\\cmake.exe\" -B build -S .)",
+      "Bash(D:\\\\Programs\\\\cmake\\\\bin\\\\cmake.exe --build:*)",
+      "Bash(/d/Programs/cmake/bin/cmake.exe --build:*)",
+      "Bash(/d/Programs/cmake/bin/cmake.exe:*)"
+    ]
+  }
+}

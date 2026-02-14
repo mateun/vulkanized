@@ -1,0 +1,37 @@
+#ifndef ENGINE_VK_BUFFER_H
+#define ENGINE_VK_BUFFER_H
+
+#include "renderer/vk_types.h"
+#include "core/common.h"
+
+/* Create a Vulkan buffer + device memory allocation. */
+EngineResult vk_create_buffer(VulkanContext *ctx,
+                              VkDeviceSize size,
+                              VkBufferUsageFlags usage,
+                              VkMemoryPropertyFlags mem_props,
+                              VkBuffer *out_buffer,
+                              VkDeviceMemory *out_memory);
+
+/* Pre-allocate a shared vertex buffer on the GPU. Call once at init. */
+EngineResult vk_create_vertex_buffer(VulkanContext *ctx, u32 max_vertices);
+
+/* Upload a mesh into the shared vertex buffer. Returns the mesh index. */
+EngineResult vk_upload_mesh(VulkanContext *ctx,
+                            const Vertex *vertices, u32 vertex_count,
+                            MeshHandle *out_handle);
+
+/* Create a texture from raw pixel data (R8 single-channel or RGBA). */
+EngineResult vk_create_texture(VulkanContext *ctx,
+                               const u8 *pixels,
+                               u32 width, u32 height,
+                               VkFormat format,
+                               VulkanTexture *out_tex);
+
+/* Destroy a texture and free its resources. */
+void vk_destroy_texture(VulkanContext *ctx, VulkanTexture *tex);
+
+/* One-shot command helpers (exposed for text module). */
+VkCommandBuffer vk_begin_single_command(VulkanContext *ctx);
+void            vk_end_single_command(VulkanContext *ctx, VkCommandBuffer cmd);
+
+#endif /* ENGINE_VK_BUFFER_H */
