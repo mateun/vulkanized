@@ -36,7 +36,70 @@ typedef struct {
     u32           instance_count;  /* number of instances */
 } DrawCommand;
 
+/* ---- Bloom post-processing context ---- */
+
 typedef struct {
+    /* Offscreen images */
+    VkImage        scene_image;
+    VkDeviceMemory scene_memory;
+    VkImageView    scene_view;
+    VkSampler      scene_sampler;
+
+    VkImage        bloom_a_image;
+    VkDeviceMemory bloom_a_memory;
+    VkImageView    bloom_a_view;
+    VkSampler      bloom_a_sampler;
+
+    VkImage        bloom_b_image;
+    VkDeviceMemory bloom_b_memory;
+    VkImageView    bloom_b_view;
+    VkSampler      bloom_b_sampler;
+
+    /* Render passes */
+    VkRenderPass   scene_render_pass;       /* HDR color + depth */
+    VkRenderPass   postprocess_render_pass; /* single HDR color (extract + blur) */
+    VkRenderPass   composite_render_pass;   /* single swapchain-format color */
+
+    /* Framebuffers */
+    VkFramebuffer  scene_framebuffer;
+    VkFramebuffer  extract_framebuffer;     /* -> bloom_a */
+    VkFramebuffer  blur_h_framebuffer;      /* -> bloom_b */
+    VkFramebuffer  blur_v_framebuffer;      /* -> bloom_a */
+    VkFramebuffer *composite_framebuffers;  /* one per swapchain image */
+
+    /* Scene pipelines (geometry + text, for HDR render pass) */
+    VkPipeline     scene_graphics_pipeline;
+    VkPipeline     scene_text_pipeline;
+
+    /* Post-processing pipelines */
+    VkPipelineLayout extract_layout;
+    VkPipeline       extract_pipeline;
+    VkPipelineLayout blur_layout;
+    VkPipeline       blur_pipeline;
+    VkPipelineLayout composite_layout;
+    VkPipeline       composite_pipeline;
+
+    /* Descriptors */
+    VkDescriptorSetLayout single_sampler_layout; /* 1 combined image sampler */
+    VkDescriptorSetLayout dual_sampler_layout;   /* 2 combined image samplers */
+    VkDescriptorPool      desc_pool;
+    VkDescriptorSet       extract_desc_set;      /* samples scene_image */
+    VkDescriptorSet       blur_h_desc_set;       /* samples bloom_a */
+    VkDescriptorSet       blur_v_desc_set;       /* samples bloom_b */
+    VkDescriptorSet       composite_desc_set;    /* samples scene_image + bloom_a */
+
+    /* Depth buffer for HDR scene rendering */
+    VkImage        depth_image;
+    VkDeviceMemory depth_memory;
+    VkImageView    depth_view;
+
+    VkExtent2D     bloom_extent; /* half-res */
+    bool           enabled;
+} BloomContext;
+
+/* ---- Main Vulkan context ---- */
+
+typedef struct VulkanContext {
     VkInstance               instance;
     VkDebugUtilsMessengerEXT debug_messenger;
     VkPhysicalDevice         physical_device;
@@ -121,6 +184,9 @@ typedef struct {
     void                    *text_vertex_mapped;   /* persistently mapped pointer */
     u32                      text_vertex_count;
     u32                      text_vertex_capacity;
+
+    /* Bloom post-processing */
+    BloomContext             bloom;
 
     /* Command pool & buffers */
     VkCommandPool            command_pool;

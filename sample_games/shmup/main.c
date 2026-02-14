@@ -99,10 +99,24 @@ int main(void) {
         return 1;
     }
 
+    /* ---- Enable bloom (80s arcade neon glow) ---- */
+    renderer_set_bloom(renderer, true, 0.8f, 0.6f);
+
     /* ---- Generate instances ---- */
     srand((unsigned)time(NULL));
 
-    /* Enemies (quads, red) */
+    /* Neon color palette — HDR values > 1.0 glow through the bloom threshold */
+    static const f32 neon_colors[][3] = {
+        { 2.0f, 0.0f, 1.5f },  /* hot pink / magenta */
+        { 0.0f, 1.8f, 2.0f },  /* electric cyan */
+        { 2.0f, 1.0f, 0.0f },  /* neon orange */
+        { 0.0f, 2.0f, 0.5f },  /* neon green */
+        { 1.5f, 0.0f, 2.0f },  /* purple */
+        { 2.0f, 0.2f, 0.2f },  /* neon red */
+    };
+    static const int num_neon = sizeof(neon_colors) / sizeof(neon_colors[0]);
+
+    /* Enemies (quads) — each gets a random neon color */
     InstanceData enemies[NUM_ENEMIES];
     for (int i = 0; i < NUM_ENEMIES; i++) {
         enemies[i].position[0] = ((f32)rand() / RAND_MAX) * 30.0f - 15.0f;
@@ -110,17 +124,18 @@ int main(void) {
         enemies[i].rotation    = ((f32)rand() / RAND_MAX) * 6.2831853f;
         enemies[i].scale[0]    = 2.0f;
         enemies[i].scale[1]    = 2.0f;
-        enemies[i].color[0]    = 1.0f;
-        enemies[i].color[1]    = 1.0f;
-        enemies[i].color[2]    = 1.0f;
+        int ci = rand() % num_neon;
+        enemies[i].color[0]    = neon_colors[ci][0];
+        enemies[i].color[1]    = neon_colors[ci][1];
+        enemies[i].color[2]    = neon_colors[ci][2];
     }
 
-    /* Player (triangle, white) */
+    /* Player (triangle, bright cyan — HDR so it glows) */
     InstanceData player = {
         .position = { 0.0f, 0.0f },
         .rotation = 0.0f,
         .scale    = { 2.0f, 2.0f },
-        .color    = { 0.9f, 0.9f, 0.9f },
+        .color    = { 0.2f, 1.8f, 2.0f },
     };
 
     /* ---- Main loop ---- */
@@ -146,6 +161,11 @@ int main(void) {
         if (window_was_resized(window)) {
             window_reset_resized(window);
             renderer_handle_resize(renderer);
+        }
+
+        /* Spin enemies */
+        for (int i = 0; i < NUM_ENEMIES; i++) {
+            enemies[i].rotation += 1.5f * delta_time; /* ~90 deg/sec */
         }
 
         /* ---- Frame ---- */

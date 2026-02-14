@@ -1,8 +1,9 @@
-#include "renderer/renderer.h"
 #include "renderer/vk_types.h"
+#include "renderer/renderer.h"
 #include "renderer/vk_init.h"
 #include "renderer/vk_pipeline.h"
 #include "renderer/vk_buffer.h"
+#include "renderer/bloom.h"
 #include "renderer/text.h"
 #include "platform/window.h"
 #include "core/log.h"
@@ -25,6 +26,7 @@ struct Renderer {
     Window       *window;
     u32           current_image_index; /* set by begin_frame, used by end_frame */
     f32           clear_color[4];      /* r, g, b, a */
+    BloomSettings bloom_settings;      /* current bloom config */
 };
 
 /* --------------------------------------------------------------------------
@@ -43,6 +45,11 @@ static EngineResult recreate_swapchain(Renderer *r) {
 
     vkDeviceWaitIdle(r->vk.device);
 
+    /* Destroy bloom resources that depend on swapchain image views FIRST */
+    if (r->vk.bloom.enabled) {
+        bloom_cleanup_swapchain_deps(&r->vk);
+    }
+
     vk_cleanup_swapchain(&r->vk);
 
     EngineResult res;
@@ -51,15 +58,66 @@ static EngineResult recreate_swapchain(Renderer *r) {
     if ((res = vk_create_depth_resources(&r->vk))            != ENGINE_SUCCESS) return res;
     if ((res = vk_create_framebuffers(&r->vk))               != ENGINE_SUCCESS) return res;
 
+    /* Recreate bloom size-dependent resources */
+    if (r->vk.bloom.enabled) {
+        if ((res = bloom_resize(&r->vk)) != ENGINE_SUCCESS) return res;
+    }
+
     LOG_INFO("Swapchain recreated: %dx%d", width, height);
     return ENGINE_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
+ * Helper: record geometry draw commands into a command buffer.
+ * Used by both the bloom path and the non-bloom path.
+ * ------------------------------------------------------------------------ */
+
+static void record_geometry_draws(VulkanContext *vk, VkCommandBuffer cmd, VkPipeline geo_pipeline) {
+    if (vk->draw_command_count == 0) return;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, geo_pipeline);
+
+    /* Bind vertex buffer (binding 0) and instance buffer (binding 1) */
+    VkBuffer buffers[] = { vk->vertex_buffer, vk->instance_buffer };
+    VkDeviceSize offsets[] = { 0, 0 };
+    vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+
+    for (u32 i = 0; i < vk->draw_command_count; i++) {
+        DrawCommand *dc = &vk->draw_commands[i];
+        MeshSlot *mesh  = &vk->meshes[dc->mesh];
+
+        /* Push VP matrix + use_texture flag (68 bytes total) */
+        struct { float vp[16]; u32 use_texture; } push_data;
+        memcpy(push_data.vp, vk->vp_matrix, 64);
+        push_data.use_texture = (dc->texture != TEXTURE_HANDLE_INVALID) ? 1 : 0;
+        vkCmdPushConstants(cmd, vk->pipeline_layout,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, 68, &push_data);
+
+        /* Bind texture descriptor (real texture or dummy for untextured) */
+        VkDescriptorSet desc_set = vk->dummy_desc_set;
+        if (dc->texture != TEXTURE_HANDLE_INVALID && dc->texture < vk->texture_count) {
+            desc_set = vk->texture_desc_sets[dc->texture];
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 vk->pipeline_layout, 0, 1,
+                                 &desc_set, 0, NULL);
+
+        vkCmdDraw(cmd,
+                  mesh->vertex_count,   /* vertexCount */
+                  dc->instance_count,   /* instanceCount */
+                  mesh->first_vertex,   /* firstVertex */
+                  dc->instance_offset); /* firstInstance */
+    }
 }
 
 /* --------------------------------------------------------------------------
  * Command buffer recording
  * ------------------------------------------------------------------------ */
 
-static EngineResult record_command_buffer(VulkanContext *vk, VkCommandBuffer cmd, u32 image_index) {
+static EngineResult record_command_buffer(Renderer *renderer, VkCommandBuffer cmd, u32 image_index) {
+    VulkanContext *vk = &renderer->vk;
+
     VkCommandBufferBeginInfo begin_info = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
     };
@@ -69,86 +127,93 @@ static EngineResult record_command_buffer(VulkanContext *vk, VkCommandBuffer cmd
         return ENGINE_ERROR_VULKAN_INIT;
     }
 
-    VkClearValue clear_values[2];
-    clear_values[0].color = (VkClearColorValue){{
-        vk->clear_color[0], vk->clear_color[1],
-        vk->clear_color[2], vk->clear_color[3]
-    }};
-    clear_values[1].depthStencil = (VkClearDepthStencilValue){ 1.0f, 0 };
+    if (vk->bloom.enabled) {
+        /* ================================================================
+         * BLOOM PATH: Render scene to offscreen HDR, then post-process
+         * ================================================================ */
 
-    VkRenderPassBeginInfo rp_info = {
-        .sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-        .renderPass  = vk->render_pass,
-        .framebuffer = vk->framebuffers[image_index],
-        .renderArea  = {
-            .offset = {0, 0},
-            .extent = vk->swapchain_extent,
-        },
-        .clearValueCount = 2,
-        .pClearValues    = clear_values,
-    };
+        VkClearValue clear_values[2];
+        clear_values[0].color = (VkClearColorValue){{
+            vk->clear_color[0], vk->clear_color[1],
+            vk->clear_color[2], vk->clear_color[3]
+        }};
+        clear_values[1].depthStencil = (VkClearDepthStencilValue){ 1.0f, 0 };
 
-    vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+        /* Pass 1: Scene -> offscreen HDR image */
+        VkRenderPassBeginInfo rp_info = {
+            .sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass  = vk->bloom.scene_render_pass,
+            .framebuffer = vk->bloom.scene_framebuffer,
+            .renderArea  = { .offset = {0, 0}, .extent = vk->swapchain_extent },
+            .clearValueCount = 2,
+            .pClearValues    = clear_values,
+        };
 
-    /* Dynamic viewport & scissor */
-    VkViewport viewport = {
-        .x        = 0.0f,
-        .y        = 0.0f,
-        .width    = (float)vk->swapchain_extent.width,
-        .height   = (float)vk->swapchain_extent.height,
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f,
-    };
-    vkCmdSetViewport(cmd, 0, 1, &viewport);
+        vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
 
-    VkRect2D scissor = {
-        .offset = {0, 0},
-        .extent = vk->swapchain_extent,
-    };
-    vkCmdSetScissor(cmd, 0, 1, &scissor);
+        /* Dynamic viewport & scissor */
+        VkViewport viewport = {
+            0.0f, 0.0f,
+            (float)vk->swapchain_extent.width, (float)vk->swapchain_extent.height,
+            0.0f, 1.0f,
+        };
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
 
-    /* Draw instanced geometry — one vkCmdDraw per draw command */
-    if (vk->draw_command_count > 0) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, vk->graphics_pipeline);
+        VkRect2D scissor = { .offset = {0, 0}, .extent = vk->swapchain_extent };
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        /* Bind vertex buffer (binding 0) and instance buffer (binding 1) */
-        VkBuffer buffers[] = { vk->vertex_buffer, vk->instance_buffer };
-        VkDeviceSize offsets[] = { 0, 0 };
-        vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+        /* Draw geometry using bloom scene pipeline */
+        record_geometry_draws(vk, cmd, vk->bloom.scene_graphics_pipeline);
 
-        for (u32 i = 0; i < vk->draw_command_count; i++) {
-            DrawCommand *dc = &vk->draw_commands[i];
-            MeshSlot *mesh  = &vk->meshes[dc->mesh];
+        /* Draw text using bloom scene text pipeline */
+        text_flush_with_pipeline(vk, cmd, vk->bloom.scene_text_pipeline);
 
-            /* Push VP matrix + use_texture flag (68 bytes total) */
-            struct { float vp[16]; u32 use_texture; } push_data;
-            memcpy(push_data.vp, vk->vp_matrix, 64);
-            push_data.use_texture = (dc->texture != TEXTURE_HANDLE_INVALID) ? 1 : 0;
-            vkCmdPushConstants(cmd, vk->pipeline_layout,
-                               VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                               0, 68, &push_data);
+        vkCmdEndRenderPass(cmd);
 
-            /* Bind texture descriptor (real texture or dummy for untextured) */
-            VkDescriptorSet desc_set = vk->dummy_desc_set;
-            if (dc->texture != TEXTURE_HANDLE_INVALID && dc->texture < vk->texture_count) {
-                desc_set = vk->texture_desc_sets[dc->texture];
-            }
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                     vk->pipeline_layout, 0, 1,
-                                     &desc_set, 0, NULL);
+        /* Passes 2-5: extract, blur, composite */
+        bloom_record(vk, cmd, &renderer->bloom_settings, image_index);
 
-            vkCmdDraw(cmd,
-                      mesh->vertex_count,   /* vertexCount */
-                      dc->instance_count,   /* instanceCount */
-                      mesh->first_vertex,   /* firstVertex */
-                      dc->instance_offset); /* firstInstance */
-        }
+    } else {
+        /* ================================================================
+         * ORIGINAL PATH: Single render pass directly to swapchain
+         * ================================================================ */
+
+        VkClearValue clear_values[2];
+        clear_values[0].color = (VkClearColorValue){{
+            vk->clear_color[0], vk->clear_color[1],
+            vk->clear_color[2], vk->clear_color[3]
+        }};
+        clear_values[1].depthStencil = (VkClearDepthStencilValue){ 1.0f, 0 };
+
+        VkRenderPassBeginInfo rp_info = {
+            .sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass  = vk->render_pass,
+            .framebuffer = vk->framebuffers[image_index],
+            .renderArea  = { .offset = {0, 0}, .extent = vk->swapchain_extent },
+            .clearValueCount = 2,
+            .pClearValues    = clear_values,
+        };
+
+        vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+
+        VkViewport viewport = {
+            0.0f, 0.0f,
+            (float)vk->swapchain_extent.width, (float)vk->swapchain_extent.height,
+            0.0f, 1.0f,
+        };
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+        VkRect2D scissor = { .offset = {0, 0}, .extent = vk->swapchain_extent };
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        /* Draw geometry using standard pipeline */
+        record_geometry_draws(vk, cmd, vk->graphics_pipeline);
+
+        /* Draw text overlay */
+        text_flush(vk, cmd);
+
+        vkCmdEndRenderPass(cmd);
     }
-
-    /* Draw text overlay (switches to text pipeline internally) */
-    text_flush(vk, cmd);
-
-    vkCmdEndRenderPass(cmd);
 
     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) {
         LOG_ERROR("Failed to record command buffer");
@@ -186,7 +251,7 @@ static void compute_vp_matrix(VulkanContext *vk, const Camera2D *camera) {
     vec3 translate = { -camera->position[0], -camera->position[1], 0.0f };
     glm_translate(view, translate);
 
-    /* VP = projection × view */
+    /* VP = projection x view */
     mat4 vp;
     glm_mat4_mul(proj, view, vp);
 
@@ -204,6 +269,10 @@ EngineResult renderer_create(Window *window, const RendererConfig *config,
     if (!r) return ENGINE_ERROR_OUT_OF_MEMORY;
 
     r->window = window;
+
+    /* Default bloom settings */
+    BloomSettings default_bloom = BLOOM_SETTINGS_DEFAULT;
+    r->bloom_settings = default_bloom;
 
     /* Clear color: use config if any channel is non-zero, else default dark grey */
     if (config->clear_color[0] != 0.0f || config->clear_color[1] != 0.0f ||
@@ -299,6 +368,9 @@ EngineResult renderer_create(Window *window, const RendererConfig *config,
         vkUpdateDescriptorSets(r->vk.device, 1, &write, 0, NULL);
     }
 
+    /* Bloom post-processing (creates all bloom resources — disabled by default) */
+    if ((res = bloom_init(&r->vk)) != ENGINE_SUCCESS) goto fail;
+
     if ((res = vk_create_command_buffers(&r->vk))    != ENGINE_SUCCESS) goto fail;
     if ((res = vk_create_sync_objects(&r->vk))       != ENGINE_SUCCESS) goto fail;
 
@@ -316,6 +388,9 @@ void renderer_destroy(Renderer *renderer) {
         VulkanContext *vk = &renderer->vk;
 
         vkDeviceWaitIdle(vk->device);
+
+        /* Bloom cleanup */
+        bloom_shutdown(vk);
 
         /* Instance buffer cleanup */
         if (vk->instance_mapped) {
@@ -388,7 +463,7 @@ EngineResult renderer_end_frame(Renderer *renderer) {
 
     /* Record command buffer */
     vkResetCommandBuffer(vk->command_buffers[frame], 0);
-    EngineResult res = record_command_buffer(vk, vk->command_buffers[frame],
+    EngineResult res = record_command_buffer(renderer, vk->command_buffers[frame],
                                               renderer->current_image_index);
     if (res != ENGINE_SUCCESS) return res;
 
@@ -612,4 +687,14 @@ void renderer_get_extent(const Renderer *renderer, u32 *width, u32 *height) {
 
 EngineResult renderer_handle_resize(Renderer *renderer) {
     return recreate_swapchain(renderer);
+}
+
+void renderer_set_bloom(Renderer *renderer, bool enabled, f32 intensity, f32 threshold) {
+    renderer->vk.bloom.enabled = enabled;
+    renderer->bloom_settings.intensity = intensity;
+    renderer->bloom_settings.threshold = threshold;
+}
+
+void renderer_set_bloom_settings(Renderer *renderer, const BloomSettings *settings) {
+    renderer->bloom_settings = *settings;
 }

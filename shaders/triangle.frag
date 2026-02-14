@@ -13,9 +13,18 @@ layout(push_constant) uniform PushConstants {
 
 void main() {
     vec3 color = frag_color;
+    float alpha = 1.0;
+
     if (pc.use_texture != 0u) {
         vec4 tex_sample = texture(tex, frag_uv);
         color *= tex_sample.rgb;
+        alpha = tex_sample.a;
     }
-    out_color = vec4(color, 1.0);
+
+    /* Discard nearly-transparent fragments so they don't write to the
+     * depth buffer and block geometry behind them. */
+    if (alpha < 0.01)
+        discard;
+
+    out_color = vec4(color, alpha);
 }

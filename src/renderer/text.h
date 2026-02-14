@@ -16,8 +16,12 @@ void text_draw(VulkanContext *ctx, const char *str,
                f32 x, f32 y, f32 scale, f32 r, f32 g, f32 b);
 
 /* Upload queued text vertices and record draw commands into the given command buffer.
- * Must be called inside a render pass. */
+ * Must be called inside a render pass. Uses the default text pipeline. */
 void text_flush(VulkanContext *ctx, VkCommandBuffer cmd);
+
+/* Upload queued text vertices using a specific pipeline (for bloom HDR pass).
+ * Must be called inside a render pass. */
+void text_flush_with_pipeline(VulkanContext *ctx, VkCommandBuffer cmd, VkPipeline pipeline);
 
 /* Destroy text rendering resources. */
 void text_shutdown(VulkanContext *ctx);

@@ -190,7 +190,7 @@ void text_draw(VulkanContext *ctx, const char *str,
     }
 }
 
-void text_flush(VulkanContext *ctx, VkCommandBuffer cmd) {
+void text_flush_with_pipeline(VulkanContext *ctx, VkCommandBuffer cmd, VkPipeline pipeline) {
     if (s_vertex_count == 0) return;
 
     /* Upload vertex data via persistently mapped pointer (no map/unmap overhead) */
@@ -198,8 +198,8 @@ void text_flush(VulkanContext *ctx, VkCommandBuffer cmd) {
 
     ctx->text_vertex_count = s_vertex_count;
 
-    /* Bind text pipeline */
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, ctx->text_pipeline);
+    /* Bind text pipeline (may be the default or bloom scene text pipeline) */
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
     /* Push screen size */
     f32 screen_size[2] = {
@@ -224,6 +224,10 @@ void text_flush(VulkanContext *ctx, VkCommandBuffer cmd) {
 
     /* Reset for next frame */
     s_vertex_count = 0;
+}
+
+void text_flush(VulkanContext *ctx, VkCommandBuffer cmd) {
+    text_flush_with_pipeline(ctx, cmd, ctx->text_pipeline);
 }
 
 void text_shutdown(VulkanContext *ctx) {

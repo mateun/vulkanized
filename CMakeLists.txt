@@ -47,6 +47,7 @@ set(ENGINE_SOURCES
     src/renderer/vk_pipeline.c
     src/renderer/vk_buffer.c
     src/renderer/text.c
+    src/renderer/bloom.c
     src/renderer/stb_impl.c
 )
 

@@ -9,7 +9,7 @@
  * Shader module loading
  * ------------------------------------------------------------------------ */
 
-static u8 *read_file(const char *path, size_t *out_size) {
+u8 *vk_read_file(const char *path, size_t *out_size) {
     FILE *f = fopen(path, "rb");
     if (!f) {
         LOG_ERROR("Failed to open file: %s", path);
@@ -33,7 +33,7 @@ static u8 *read_file(const char *path, size_t *out_size) {
     return buf;
 }
 
-static VkShaderModule create_shader_module(VkDevice device, const u8 *code, size_t size) {
+VkShaderModule vk_create_shader_module(VkDevice device, const u8 *code, size_t size) {
     VkShaderModuleCreateInfo create_info = {
         .sType    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .codeSize = size,
@@ -132,8 +132,8 @@ EngineResult vk_create_render_pass(VulkanContext *ctx) {
 EngineResult vk_create_graphics_pipeline(VulkanContext *ctx) {
     /* Load SPIR-V shaders */
     size_t vert_size, frag_size;
-    u8 *vert_code = read_file("shaders/triangle.vert.spv", &vert_size);
-    u8 *frag_code = read_file("shaders/triangle.frag.spv", &frag_size);
+    u8 *vert_code = vk_read_file("shaders/triangle.vert.spv", &vert_size);
+    u8 *frag_code = vk_read_file("shaders/triangle.frag.spv", &frag_size);
 
     if (!vert_code || !frag_code) {
         free(vert_code);
@@ -142,8 +142,8 @@ EngineResult vk_create_graphics_pipeline(VulkanContext *ctx) {
         return ENGINE_ERROR_FILE_NOT_FOUND;
     }
 
-    VkShaderModule vert_module = create_shader_module(ctx->device, vert_code, vert_size);
-    VkShaderModule frag_module = create_shader_module(ctx->device, frag_code, frag_size);
+    VkShaderModule vert_module = vk_create_shader_module(ctx->device, vert_code, vert_size);
+    VkShaderModule frag_module = vk_create_shader_module(ctx->device, frag_code, frag_size);
     free(vert_code);
     free(frag_code);
 
@@ -278,9 +278,15 @@ EngineResult vk_create_graphics_pipeline(VulkanContext *ctx) {
     };
 
     VkPipelineColorBlendAttachmentState blend_attachment = {
-        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
-        .blendEnable    = VK_FALSE,
+        .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+        .blendEnable         = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp        = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp        = VK_BLEND_OP_ADD,
     };
 
     VkPipelineColorBlendStateCreateInfo color_blending = {
@@ -397,8 +403,8 @@ EngineResult vk_create_graphics_pipeline(VulkanContext *ctx) {
 EngineResult vk_create_text_pipeline(VulkanContext *ctx) {
     /* Load text shaders */
     size_t vert_size, frag_size;
-    u8 *vert_code = read_file("shaders/text.vert.spv", &vert_size);
-    u8 *frag_code = read_file("shaders/text.frag.spv", &frag_size);
+    u8 *vert_code = vk_read_file("shaders/text.vert.spv", &vert_size);
+    u8 *frag_code = vk_read_file("shaders/text.frag.spv", &frag_size);
 
     if (!vert_code || !frag_code) {
         free(vert_code);
@@ -407,8 +413,8 @@ EngineResult vk_create_text_pipeline(VulkanContext *ctx) {
         return ENGINE_ERROR_FILE_NOT_FOUND;
     }
 
-    VkShaderModule vert_module = create_shader_module(ctx->device, vert_code, vert_size);
-    VkShaderModule frag_module = create_shader_module(ctx->device, frag_code, frag_size);
+    VkShaderModule vert_module = vk_create_shader_module(ctx->device, vert_code, vert_size);
+    VkShaderModule frag_module = vk_create_shader_module(ctx->device, frag_code, frag_size);
     free(vert_code);
     free(frag_code);
 
@@ -602,5 +608,259 @@ EngineResult vk_create_text_pipeline(VulkanContext *ctx) {
     }
 
     LOG_INFO("Text pipeline created");
+    return ENGINE_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
+ * Bloom scene pipelines (geometry + text against HDR render pass)
+ * Same shaders and config as the main pipelines, but attached to the
+ * bloom scene render pass (R16G16B16A16_SFLOAT + depth).
+ * ------------------------------------------------------------------------ */
+
+EngineResult vk_create_bloom_scene_pipelines(VulkanContext *ctx) {
+    /* ---- Geometry pipeline (same as vk_create_graphics_pipeline but for bloom render pass) ---- */
+    size_t vert_size, frag_size;
+    u8 *vert_code = vk_read_file("shaders/triangle.vert.spv", &vert_size);
+    u8 *frag_code = vk_read_file("shaders/triangle.frag.spv", &frag_size);
+
+    if (!vert_code || !frag_code) {
+        free(vert_code);
+        free(frag_code);
+        LOG_FATAL("Failed to load shader files for bloom scene pipeline");
+        return ENGINE_ERROR_FILE_NOT_FOUND;
+    }
+
+    VkShaderModule vert_module = vk_create_shader_module(ctx->device, vert_code, vert_size);
+    VkShaderModule frag_module = vk_create_shader_module(ctx->device, frag_code, frag_size);
+    free(vert_code);
+    free(frag_code);
+
+    if (vert_module == VK_NULL_HANDLE || frag_module == VK_NULL_HANDLE) {
+        return ENGINE_ERROR_VULKAN_PIPELINE;
+    }
+
+    VkPipelineShaderStageCreateInfo shader_stages[] = {
+        {
+            .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage  = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vert_module,
+            .pName  = "main",
+        },
+        {
+            .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage  = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = frag_module,
+            .pName  = "main",
+        },
+    };
+
+    VkVertexInputBindingDescription bindings[] = {
+        { .binding = 0, .stride = sizeof(Vertex), .inputRate = VK_VERTEX_INPUT_RATE_VERTEX },
+        { .binding = 1, .stride = sizeof(InstanceData), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE },
+    };
+
+    VkVertexInputAttributeDescription attributes[] = {
+        { .binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, position) },
+        { .binding = 0, .location = 1, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(Vertex, uv) },
+        { .binding = 0, .location = 2, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex, color) },
+        { .binding = 1, .location = 3, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(InstanceData, position) },
+        { .binding = 1, .location = 4, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(InstanceData, rotation) },
+        { .binding = 1, .location = 5, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(InstanceData, scale) },
+        { .binding = 1, .location = 6, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(InstanceData, color) },
+    };
+
+    VkPipelineVertexInputStateCreateInfo vertex_input = {
+        .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount   = ENGINE_ARRAY_LEN(bindings),
+        .pVertexBindingDescriptions      = bindings,
+        .vertexAttributeDescriptionCount = ENGINE_ARRAY_LEN(attributes),
+        .pVertexAttributeDescriptions    = attributes,
+    };
+
+    VkPipelineInputAssemblyStateCreateInfo input_assembly = {
+        .sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+    };
+
+    VkDynamicState dynamic_states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+    VkPipelineDynamicStateCreateInfo dynamic_state = {
+        .sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .dynamicStateCount = ENGINE_ARRAY_LEN(dynamic_states),
+        .pDynamicStates    = dynamic_states,
+    };
+
+    VkPipelineViewportStateCreateInfo viewport_state = {
+        .sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1,
+        .scissorCount  = 1,
+    };
+
+    VkPipelineRasterizationStateCreateInfo rasterizer = {
+        .sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth   = 1.0f,
+        .cullMode    = VK_CULL_MODE_BACK_BIT,
+        .frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+    };
+
+    VkPipelineMultisampleStateCreateInfo multisampling = {
+        .sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+    };
+
+    VkPipelineDepthStencilStateCreateInfo depth_stencil = {
+        .sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable  = VK_TRUE,
+        .depthWriteEnable = VK_TRUE,
+        .depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL,
+    };
+
+    VkPipelineColorBlendAttachmentState blend_attachment = {
+        .colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+        .blendEnable         = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp        = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp        = VK_BLEND_OP_ADD,
+    };
+
+    VkPipelineColorBlendStateCreateInfo color_blending = {
+        .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments    = &blend_attachment,
+    };
+
+    /* Reuse the existing pipeline layout (same push constants + descriptors) */
+    VkGraphicsPipelineCreateInfo pipeline_info = {
+        .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount          = ENGINE_ARRAY_LEN(shader_stages),
+        .pStages             = shader_stages,
+        .pVertexInputState   = &vertex_input,
+        .pInputAssemblyState = &input_assembly,
+        .pViewportState      = &viewport_state,
+        .pRasterizationState  = &rasterizer,
+        .pMultisampleState    = &multisampling,
+        .pDepthStencilState   = &depth_stencil,
+        .pColorBlendState     = &color_blending,
+        .pDynamicState        = &dynamic_state,
+        .layout               = ctx->pipeline_layout,       /* same layout as main geo pipeline */
+        .renderPass           = ctx->bloom.scene_render_pass, /* HDR render pass */
+        .subpass              = 0,
+    };
+
+    VkResult result = vkCreateGraphicsPipelines(ctx->device, VK_NULL_HANDLE, 1,
+                                                 &pipeline_info, NULL,
+                                                 &ctx->bloom.scene_graphics_pipeline);
+
+    vkDestroyShaderModule(ctx->device, vert_module, NULL);
+    vkDestroyShaderModule(ctx->device, frag_module, NULL);
+
+    if (result != VK_SUCCESS) {
+        LOG_FATAL("Failed to create bloom scene graphics pipeline");
+        return ENGINE_ERROR_VULKAN_PIPELINE;
+    }
+
+    /* ---- Text pipeline for bloom scene ---- */
+    vert_code = vk_read_file("shaders/text.vert.spv", &vert_size);
+    frag_code = vk_read_file("shaders/text.frag.spv", &frag_size);
+
+    if (!vert_code || !frag_code) {
+        free(vert_code);
+        free(frag_code);
+        LOG_FATAL("Failed to load text shaders for bloom scene pipeline");
+        return ENGINE_ERROR_FILE_NOT_FOUND;
+    }
+
+    vert_module = vk_create_shader_module(ctx->device, vert_code, vert_size);
+    frag_module = vk_create_shader_module(ctx->device, frag_code, frag_size);
+    free(vert_code);
+    free(frag_code);
+
+    if (vert_module == VK_NULL_HANDLE || frag_module == VK_NULL_HANDLE) {
+        return ENGINE_ERROR_VULKAN_PIPELINE;
+    }
+
+    VkPipelineShaderStageCreateInfo text_stages[] = {
+        {
+            .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage  = VK_SHADER_STAGE_VERTEX_BIT,
+            .module = vert_module,
+            .pName  = "main",
+        },
+        {
+            .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage  = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .module = frag_module,
+            .pName  = "main",
+        },
+    };
+
+    VkVertexInputBindingDescription text_binding = {
+        .binding   = 0,
+        .stride    = sizeof(TextVertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+
+    VkVertexInputAttributeDescription text_attribs[] = {
+        { .binding = 0, .location = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(TextVertex, position) },
+        { .binding = 0, .location = 1, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(TextVertex, uv) },
+        { .binding = 0, .location = 2, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(TextVertex, color) },
+    };
+
+    VkPipelineVertexInputStateCreateInfo text_vertex_input = {
+        .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount   = 1,
+        .pVertexBindingDescriptions      = &text_binding,
+        .vertexAttributeDescriptionCount = ENGINE_ARRAY_LEN(text_attribs),
+        .pVertexAttributeDescriptions    = text_attribs,
+    };
+
+    VkPipelineRasterizationStateCreateInfo text_rasterizer = {
+        .sType       = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth   = 1.0f,
+        .cullMode    = VK_CULL_MODE_NONE,
+        .frontFace   = VK_FRONT_FACE_CLOCKWISE,
+    };
+
+    VkPipelineDepthStencilStateCreateInfo text_depth = {
+        .sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable  = VK_FALSE,
+        .depthWriteEnable = VK_FALSE,
+    };
+
+    VkGraphicsPipelineCreateInfo text_pipe_info = {
+        .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount          = ENGINE_ARRAY_LEN(text_stages),
+        .pStages             = text_stages,
+        .pVertexInputState   = &text_vertex_input,
+        .pInputAssemblyState = &input_assembly,
+        .pViewportState      = &viewport_state,
+        .pRasterizationState  = &text_rasterizer,
+        .pMultisampleState    = &multisampling,
+        .pDepthStencilState   = &text_depth,
+        .pColorBlendState     = &color_blending,
+        .pDynamicState        = &dynamic_state,
+        .layout               = ctx->text_pipeline_layout,
+        .renderPass           = ctx->bloom.scene_render_pass,
+        .subpass              = 0,
+    };
+
+    result = vkCreateGraphicsPipelines(ctx->device, VK_NULL_HANDLE, 1,
+                                        &text_pipe_info, NULL,
+                                        &ctx->bloom.scene_text_pipeline);
+
+    vkDestroyShaderModule(ctx->device, vert_module, NULL);
+    vkDestroyShaderModule(ctx->device, frag_module, NULL);
+
+    if (result != VK_SUCCESS) {
+        LOG_FATAL("Failed to create bloom scene text pipeline");
+        return ENGINE_ERROR_VULKAN_PIPELINE;
+    }
+
+    LOG_INFO("Bloom scene pipelines created (geometry + text)");
     return ENGINE_SUCCESS;
 }

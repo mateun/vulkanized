@@ -52,8 +52,9 @@ ai_game_engine/
 │   │   ├── renderer_types.h             # Public vertex types (Vertex, TextVertex — no Vulkan dep)
 │   │   ├── vk_init.h / vk_init.c        # Instance, device, swapchain
 │   │   ├── vk_pipeline.h / vk_pipeline.c # Pipeline, shaders
-│   │   ├── vk_buffer.h / vk_buffer.c    # Buffers, memory
+│   │   ├── vk_buffer.h / vk_buffer.c    # Buffers, memory, texture upload
 │   │   ├── vk_types.h                   # Vulkan-specific type wrappers (internal)
+│   │   ├── bloom.h / bloom.c            # Bloom post-processing (80s neon glow)
 │   │   └── text.h / text.c              # Text rendering (stb_truetype, internal)
 │   ├── audio/             # Audio subsystem (planned)
 │   │   └── audio.h / audio.c
@@ -68,7 +69,11 @@ ai_game_engine/
 │       └── main.c         # Game entry point (owns main loop)
 ├── shaders/               # GLSL shaders (compiled to SPIR-V)
 │   ├── triangle.vert / triangle.frag    # Geometry pipeline
-│   └── text.vert / text.frag           # Text pipeline (alpha-blended)
+│   ├── text.vert / text.frag           # Text pipeline (alpha-blended)
+│   ├── fullscreen.vert                  # Fullscreen triangle (bloom passes)
+│   ├── bloom_extract.frag               # Brightness threshold extraction
+│   ├── bloom_blur.frag                  # 9-tap separable Gaussian blur
+│   └── bloom_composite.frag             # Composite + tonemap + scanlines + aberration
 ├── assets/                # Textures, models, audio, fonts
 │   └── consolas.ttf       # Font for text rendering
 └── third_party/           # Vendored header-only libs
@@ -81,20 +86,29 @@ Games include headers from `src/` and call these functions:
 
 ```c
 /* Lifecycle */
-renderer_create(window, &config, &renderer);   /* RendererConfig: font_path, font_size */
+renderer_create(window, &config, &renderer);   /* RendererConfig: font_path, font_size, clear_color */
 renderer_destroy(renderer);
 
 /* Per-frame rendering (game owns the loop) */
 renderer_begin_frame(renderer);
+renderer_set_camera(renderer, &camera);
+renderer_draw_mesh(renderer, mesh, instances, count);
+renderer_draw_mesh_textured(renderer, mesh, texture, instances, count);
 renderer_draw_text(renderer, "text", x, y, scale, r, g, b);
 renderer_end_frame(renderer);
 
-/* Geometry */
-renderer_upload_vertices(renderer, vertices, count);
+/* Geometry & textures */
+renderer_upload_mesh(renderer, vertices, count, &mesh_handle);
+renderer_load_texture(renderer, "path.png", &tex_handle);
+
+/* Bloom post-processing (80s arcade neon glow) */
+renderer_set_bloom(renderer, enabled, intensity, threshold);
+renderer_set_bloom_settings(renderer, &bloom_settings);
 
 /* Utilities */
 renderer_get_extent(renderer, &w, &h);
 renderer_handle_resize(renderer);
+renderer_set_clear_color(renderer, r, g, b, a);
 ```
 
 ## Coding Conventions
@@ -121,12 +135,14 @@ renderer_handle_resize(renderer);
 - [x] Text rendering (stb_truetype, separate alpha-blended pipeline)
 - [x] Frame timing display (11px scaled text, delta time measurement)
 - [x] Engine/game split (engine as static library, sample_games/shmup)
-- [ ] Uniform buffers (MVP matrices via cglm)
-- [ ] Texture loading + sampling (stb_image)
-- [ ] Basic camera (perspective projection + movement)
-- [ ] Depth buffering
-- [ ] Swapchain recreation on resize
-- **Milestone: textured 3D cube with camera controls**
+- [x] Instanced rendering (per-instance position, rotation, scale, color)
+- [x] 2D orthographic camera (position, rotation, zoom, half_height)
+- [x] Texture loading + sampling (stb_image, PNG/JPG/BMP)
+- [x] Depth buffering (D32_SFLOAT)
+- [x] Swapchain recreation on resize
+- [x] Bloom post-processing (5-pass: HDR scene, brightness extract, Gaussian blur, composite)
+- [x] 80s arcade effects (scanlines, chromatic aberration, vignette, Reinhard tonemap)
+- **Milestone: textured sprites with neon bloom on screen**
 
 ### Phase 3: Audio
 - [ ] miniaudio integration
@@ -171,17 +187,25 @@ cmake --build build --config Debug
 - Generator: Visual Studio 17 2022 (x64)
 
 ## Current Status
-**Phase 2 in progress — Engine split into static library + sample game.**
+**Phase 2 complete — Full 2D renderer with bloom post-processing.**
 - Phase 1 complete: triangle on screen, all Vulkan infrastructure working
-- Engine is now a static library (`engine.lib`); games link against it
-- Sample game `shmup` demonstrates the full API: window, renderer, text, frametime
-- Renderer public API: `renderer_begin_frame()` / `renderer_end_frame()` with
-  `renderer_draw_text()` and `renderer_upload_vertices()` between them
-- `renderer_types.h` exposes `Vertex` and `TextVertex` without Vulkan dependency
-- `RendererConfig` allows games to specify font path and size
-- Text rendering: stb_truetype font atlas (24px bake), scale parameter for variable sizes
-- Frametime display: delta time measured via `glfwGetTime()`, shown at 11px top-right
-- Persistent GPU mapping for text vertex buffer (no per-frame map/unmap overhead)
+- Phase 2 complete: textured instanced rendering, camera, depth, resize, bloom
+- Engine is a static library (`engine.lib`); games link against it
+- Sample game `shmup` demonstrates the full API: textured enemies with neon bloom
+- Instanced rendering: per-instance position, rotation, scale, color via vertex attributes
+- 2D orthographic camera with zoom and world-space projection (push constants)
+- Texture loading: stb_image (PNG/JPG/BMP), descriptor sets, sampler, dummy texture for untextured draws
+- Depth buffering: D32_SFLOAT format, cleared each frame
+- Swapchain resize: full recreation of swapchain, depth buffer, framebuffers, bloom resources
+- Alpha blending on geometry pipeline with fragment discard for alpha < 0.01
+- **Bloom post-processing** (5-pass pipeline):
+  - Pass 1: Scene → offscreen HDR (R16G16B16A16_SFLOAT)
+  - Pass 2: Brightness extract (soft-knee threshold)
+  - Pass 3–4: Separable Gaussian blur at half resolution (ping-pong)
+  - Pass 5: Composite → swapchain (additive bloom + Reinhard tonemap + scanlines + chromatic aberration + vignette)
+  - Scene pipeline duplication: separate VkPipelines for HDR render pass
+  - Fullscreen triangle trick: post-processing with no vertex buffer
+  - `BloomSettings` struct: intensity, threshold, soft_threshold, scanline_strength, scanline_count, aberration
+- Text rendering: stb_truetype font atlas, alpha-blended overlay, works in both bloom and non-bloom paths
 - VSync off (IMMEDIATE present mode) for uncapped FPS
-- Two pipelines: triangle (opaque geometry) + text (alpha-blended overlays)
-- Next: uniform buffers, textures (stb_image), camera, depth buffering
+- Next: audio (miniaudio), gameplay framework (ECS, Lua scripting)

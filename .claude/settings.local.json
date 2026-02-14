@@ -15,7 +15,9 @@
       "Bash(\"D:\\\\Programs\\\\cmake\\\\bin\\\\cmake.exe\" -B build -S .)",
       "Bash(D:\\\\Programs\\\\cmake\\\\bin\\\\cmake.exe --build:*)",
       "Bash(/d/Programs/cmake/bin/cmake.exe --build:*)",
-      "Bash(/d/Programs/cmake/bin/cmake.exe:*)"
+      "Bash(/d/Programs/cmake/bin/cmake.exe:*)",
+      "Bash(timeout 3 ./shmup.exe:*)",
+      "Bash(timeout:*)"
     ]
   }
 }

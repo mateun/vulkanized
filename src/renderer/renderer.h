@@ -3,6 +3,7 @@
 
 #include "core/common.h"
 #include "renderer/renderer_types.h"
+#include "renderer/bloom.h"
 
 /* Forward decls — renderer hides Vulkan from the rest of the engine */
 typedef struct Window Window;
@@ -65,5 +66,12 @@ void         renderer_get_extent(const Renderer *renderer,
 
 /* Called when window is resized to recreate swapchain */
 EngineResult renderer_handle_resize(Renderer *renderer);
+
+/* Bloom post-processing — enable/disable and configure.
+ * When enabled, the renderer uses an HDR offscreen target with bloom, scanlines,
+ * chromatic aberration, and vignette for an 80s arcade neon look. */
+void         renderer_set_bloom(Renderer *renderer, bool enabled,
+                                f32 intensity, f32 threshold);
+void         renderer_set_bloom_settings(Renderer *renderer, const BloomSettings *settings);
 
 #endif /* ENGINE_RENDERER_H */
