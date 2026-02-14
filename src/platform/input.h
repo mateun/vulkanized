@@ -21,4 +21,15 @@ bool input_key_pressed(int glfw_key);
 /* Was the key released this frame? */
 bool input_key_released(int glfw_key);
 
+/* ---- Mouse buttons ---- */
+
+/* Is the mouse button currently held down? */
+bool input_mouse_down(int glfw_button);
+
+/* Was the mouse button pressed this frame? */
+bool input_mouse_pressed(int glfw_button);
+
+/* Was the mouse button released this frame? */
+bool input_mouse_released(int glfw_button);
+
 #endif /* ENGINE_INPUT_H */
