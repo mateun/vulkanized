@@ -56,13 +56,14 @@ ai_game_engine/
 │   │   ├── vk_types.h                   # Vulkan-specific type wrappers (internal)
 │   │   ├── bloom.h / bloom.c            # Bloom post-processing (80s neon glow)
 │   │   └── text.h / text.c              # Text rendering (stb_truetype, internal)
-│   ├── audio/             # Audio subsystem (planned)
+│   ├── audio/             # Audio subsystem (miniaudio)
 │   │   └── audio.h / audio.c
-│   └── gameplay/          # ECS / GameObject system (planned)
-│       ├── world.h / world.c
-│       ├── gameobject.h / gameobject.c
-│       ├── components.h / components.c
-│       └── scripting.h / scripting.c
+│   └── gameplay/          # Gameplay utilities (collision, particles)
+│       ├── collision.h / collision.c  # Circle-circle collision detection
+│       ├── particles.h / particles.c  # Particle emitter/update/render
+│       ├── world.h / world.c          # (planned) Scene management
+│       ├── gameobject.h / gameobject.c # (planned) GameObject/Component
+│       └── scripting.h / scripting.c   # (planned) Lua scripting
 ├── sample_games/          # Sample games linking against engine
 │   └── shmup/             # Shoot-em-up sample
 │       ├── CMakeLists.txt # Builds shmup.exe, links engine, copies assets
@@ -74,11 +75,15 @@ ai_game_engine/
 │   ├── bloom_extract.frag               # Brightness threshold extraction
 │   ├── bloom_blur.frag                  # 9-tap separable Gaussian blur
 │   └── bloom_composite.frag             # Composite + tonemap + scanlines + aberration
-├── assets/                # Textures, models, audio, fonts
-│   └── consolas.ttf       # Font for text rendering
+├── assets/                # Textures, audio, fonts
+│   ├── consolas.ttf       # Font for text rendering
+│   ├── shoot.wav          # Retro laser chirp (100ms)
+│   └── explosion.wav      # Noise-burst explosion (400ms)
+├── tools/                 # Standalone utilities
+│   └── gen_sounds.c       # Procedural WAV generator
 └── third_party/           # Vendored header-only libs
-    ├── stb/               # stb_truetype.h
-    └── miniaudio/
+    ├── stb/               # stb_truetype.h, stb_image.h
+    └── miniaudio/         # miniaudio.h (audio playback)
 ```
 
 ### Engine Public API
@@ -109,6 +114,24 @@ renderer_set_bloom_settings(renderer, &bloom_settings);
 renderer_get_extent(renderer, &w, &h);
 renderer_handle_resize(renderer);
 renderer_set_clear_color(renderer, r, g, b, a);
+
+/* Audio (miniaudio backend, fire-and-forget with voice pooling) */
+audio_init(&audio_engine);
+audio_shutdown(audio_engine);
+audio_load_sound(audio_engine, "path.wav", &sound_handle);
+audio_play_sound(audio_engine, sound_handle, loop, volume);
+audio_stop_sound(audio_engine, sound_handle);
+audio_set_master_volume(audio_engine, volume);
+
+/* Collision detection (circle-circle, brute-force) */
+collision_circle_circle(ax, ay, ar, bx, by, br);
+collision_circle_vs_instances(cx, cy, radius, instances, count, instance_radius);
+collision_instances_vs_instances(a, a_count, a_radius, b, b_count, b_radius, out_pairs, max_pairs);
+
+/* Particle system (stateless, caller owns memory) */
+particles_emit(&emitter, particles, current_count, max_capacity);
+particles_update(particles, count, delta_time);
+particles_to_instances(particles, count, out_instances, max_instances);
 ```
 
 ## Coding Conventions
@@ -144,11 +167,18 @@ renderer_set_clear_color(renderer, r, g, b, a);
 - [x] 80s arcade effects (scanlines, chromatic aberration, vignette, Reinhard tonemap)
 - **Milestone: textured sprites with neon bloom on screen**
 
+### Phase 2.5: Gameplay Utilities
+- [x] Collision detection (circle-circle, circle-vs-array, array-vs-array brute force)
+- [x] Particle system (circular burst emitter, lifetime fade/shrink, swap-remove)
+- [x] Mouse input (button press/down/release callbacks)
+- **Milestone: bullets destroy enemies with particle explosions**
+
 ### Phase 3: Audio
-- [ ] miniaudio integration
-- [ ] Sound effect playback (fire-and-forget)
-- [ ] Background music (looping, crossfade)
-- [ ] Volume control / mixing
+- [x] miniaudio integration (header-only, vendored in third_party/)
+- [x] Sound effect playback (fire-and-forget with voice pooling, up to 16 overlapping per sound)
+- [x] Looping playback (loop parameter on play)
+- [x] Volume control / mixing (per-sound volume + master volume)
+- [ ] Background music (crossfade between tracks)
 - **Milestone: audio plays alongside rendering**
 
 ### Phase 4: Gameplay Framework
@@ -187,25 +217,21 @@ cmake --build build --config Debug
 - Generator: Visual Studio 17 2022 (x64)
 
 ## Current Status
-**Phase 2 complete — Full 2D renderer with bloom post-processing.**
+**Phase 3 complete — Audio, collision, particles all working.**
 - Phase 1 complete: triangle on screen, all Vulkan infrastructure working
 - Phase 2 complete: textured instanced rendering, camera, depth, resize, bloom
+- Phase 2.5 complete: collision detection, particle explosions, mouse input
+- Phase 3 complete: miniaudio integration with fire-and-forget voice pooling
 - Engine is a static library (`engine.lib`); games link against it
-- Sample game `shmup` demonstrates the full API: textured enemies with neon bloom
-- Instanced rendering: per-instance position, rotation, scale, color via vertex attributes
-- 2D orthographic camera with zoom and world-space projection (push constants)
-- Texture loading: stb_image (PNG/JPG/BMP), descriptor sets, sampler, dummy texture for untextured draws
-- Depth buffering: D32_SFLOAT format, cleared each frame
-- Swapchain resize: full recreation of swapchain, depth buffer, framebuffers, bloom resources
-- Alpha blending on geometry pipeline with fragment discard for alpha < 0.01
-- **Bloom post-processing** (5-pass pipeline):
-  - Pass 1: Scene → offscreen HDR (R16G16B16A16_SFLOAT)
-  - Pass 2: Brightness extract (soft-knee threshold)
-  - Pass 3–4: Separable Gaussian blur at half resolution (ping-pong)
-  - Pass 5: Composite → swapchain (additive bloom + Reinhard tonemap + scanlines + chromatic aberration + vignette)
-  - Scene pipeline duplication: separate VkPipelines for HDR render pass
-  - Fullscreen triangle trick: post-processing with no vertex buffer
-  - `BloomSettings` struct: intensity, threshold, soft_threshold, scanline_strength, scanline_count, aberration
-- Text rendering: stb_truetype font atlas, alpha-blended overlay, works in both bloom and non-bloom paths
+- Sample game `shmup` is a playable shoot-em-up:
+  - WASD movement with ghost trail afterimage effect
+  - Left-click to shoot bullets (with laser chirp SFX)
+  - Bullet-enemy collision → particle explosion + explosion SFX
+  - Enemy-player collision → flash damage feedback
+  - Score tracking, neon HDR colors, 80s bloom effects
+- **Renderer**: instanced drawing, 2D camera, textures, bloom (5-pass HDR pipeline), text overlay
+- **Audio**: miniaudio backend, WAV/MP3/FLAC/OGG loading, voice pool (16 overlapping per sound), master volume
+- **Collision**: circle-circle (squared distance, no sqrt), single-vs-array, array-vs-array with CollisionPair output
+- **Particles**: circular burst emitter, velocity/spin/lifetime simulation, linear color fade + quadratic scale shrink, swap-remove dead
 - VSync off (IMMEDIATE present mode) for uncapped FPS
-- Next: audio (miniaudio), gameplay framework (ECS, Lua scripting)
+- Next: background music/crossfade, gameplay framework (ECS, Lua scripting)
