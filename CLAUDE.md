@@ -49,7 +49,7 @@ ai_game_engine/
 │   │   └── input.h / input.c
 │   ├── renderer/          # Vulkan rendering
 │   │   ├── renderer.h / renderer.c      # Public API (begin/end frame, draw_text, upload_vertices)
-│   │   ├── renderer_types.h             # Public vertex types (Vertex, TextVertex — no Vulkan dep)
+│   │   ├── renderer_types.h             # Public types (Vertex, InstanceData, Camera2D — no Vulkan dep)
 │   │   ├── vk_init.h / vk_init.c        # Instance, device, swapchain
 │   │   ├── vk_pipeline.h / vk_pipeline.c # Pipeline, shaders
 │   │   ├── vk_buffer.h / vk_buffer.c    # Buffers, memory, texture upload
@@ -104,7 +104,15 @@ renderer_end_frame(renderer);
 
 /* Geometry & textures */
 renderer_upload_mesh(renderer, vertices, count, &mesh_handle);
-renderer_load_texture(renderer, "path.png", &tex_handle);
+renderer_load_texture(renderer, "path.png", &tex_handle);  /* sprite sheet atlas */
+
+/* Sprite sheet tile selection (per-instance UV remapping)
+ * Set uv_offset/uv_scale on InstanceData to pick a tile from a texture atlas.
+ * uv_scale={0,0} (default) means "use full texture" — backwards compatible. */
+instance.uv_offset[0] = col * tile_w;   /* e.g. 1.0f / 4.0f for 4-column sheet */
+instance.uv_offset[1] = row * tile_h;
+instance.uv_scale[0]  = tile_w;
+instance.uv_scale[1]  = tile_h;
 
 /* Bloom post-processing (80s arcade neon glow) */
 renderer_set_bloom(renderer, enabled, intensity, threshold);
@@ -158,13 +166,14 @@ particles_to_instances(particles, count, out_instances, max_instances);
 - [x] Text rendering (stb_truetype, separate alpha-blended pipeline)
 - [x] Frame timing display (11px scaled text, delta time measurement)
 - [x] Engine/game split (engine as static library, sample_games/shmup)
-- [x] Instanced rendering (per-instance position, rotation, scale, color)
+- [x] Instanced rendering (per-instance position, rotation, scale, color, UV offset/scale)
 - [x] 2D orthographic camera (position, rotation, zoom, half_height)
 - [x] Texture loading + sampling (stb_image, PNG/JPG/BMP)
 - [x] Depth buffering (D32_SFLOAT)
 - [x] Swapchain recreation on resize
 - [x] Bloom post-processing (5-pass: HDR scene, brightness extract, Gaussian blur, composite)
 - [x] 80s arcade effects (scanlines, chromatic aberration, vignette, Reinhard tonemap)
+- [x] Sprite sheet support (per-instance UV offset/scale for tile selection from atlas textures)
 - **Milestone: textured sprites with neon bloom on screen**
 
 ### Phase 2.5: Gameplay Utilities
@@ -229,7 +238,7 @@ cmake --build build --config Debug
   - Bullet-enemy collision → particle explosion + explosion SFX
   - Enemy-player collision → flash damage feedback
   - Score tracking, neon HDR colors, 80s bloom effects
-- **Renderer**: instanced drawing, 2D camera, textures, bloom (5-pass HDR pipeline), text overlay
+- **Renderer**: instanced drawing, 2D camera, textures, sprite sheet UV tiling, bloom (5-pass HDR pipeline), text overlay
 - **Audio**: miniaudio backend, WAV/MP3/FLAC/OGG loading, voice pool (16 overlapping per sound), master volume
 - **Collision**: circle-circle (squared distance, no sqrt), single-vs-array, array-vs-array with CollisionPair output
 - **Particles**: circular burst emitter, velocity/spin/lifetime simulation, linear color fade + quadratic scale shrink, swap-remove dead

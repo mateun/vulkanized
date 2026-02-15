@@ -20,10 +20,12 @@ typedef struct {
 /* ---- Per-instance data for instanced rendering ---- */
 
 typedef struct {
-    f32 position[2]; /* x, y world position */
-    f32 rotation;    /* radians */
-    f32 scale[2];    /* x, y scale */
-    f32 color[3];    /* r, g, b — multiplied with vertex color */
+    f32 position[2];  /* x, y world position */
+    f32 rotation;     /* radians */
+    f32 scale[2];     /* x, y scale */
+    f32 color[3];     /* r, g, b — multiplied with vertex color */
+    f32 uv_offset[2]; /* sprite sheet: top-left UV of the tile (default 0,0) */
+    f32 uv_scale[2];  /* sprite sheet: tile size in UV space (0,0 = full texture) */
 } InstanceData;
 
 /* ---- 2D Camera ---- */

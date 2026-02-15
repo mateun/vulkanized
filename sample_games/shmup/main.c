@@ -166,6 +166,7 @@ int main(void) {
 
     /* Enemies (quads) — each gets a random neon color */
     InstanceData enemies[MAX_ENEMIES];
+    memset(enemies, 0, sizeof(enemies));  /* zero-init: uv_scale={0,0} = full texture */
     int num_enemies = MAX_ENEMIES;
     for (int i = 0; i < num_enemies; i++) {
         enemies[i].position[0] = ((f32)rand() / RAND_MAX) * 30.0f - 15.0f;
@@ -194,6 +195,7 @@ int main(void) {
 
     /* ---- Bullet pool ---- */
     InstanceData bullets[MAX_BULLETS];
+    memset(bullets, 0, sizeof(bullets));  /* zero-init: uv_scale={0,0} = full texture */
     int num_bullets = 0;
     CollisionPair hit_pairs[MAX_HIT_PAIRS];
 
@@ -209,11 +211,13 @@ int main(void) {
         trail_pos[i][1] = player.position[1];
     }
     InstanceData trail_instances[TRAIL_LENGTH];
+    memset(trail_instances, 0, sizeof(trail_instances));
 
     /* ---- Particle pool ---- */
     Particle particles[MAX_PARTICLES];
     i32 num_particles = 0;
     InstanceData particle_instances[MAX_PARTICLES];
+    memset(particle_instances, 0, sizeof(particle_instances));
 
     /* ---- Main loop ---- */
     LOG_INFO("Entering main loop");

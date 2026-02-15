@@ -10,6 +10,8 @@ layout(location = 3) in vec2 inst_position;
 layout(location = 4) in float inst_rotation;
 layout(location = 5) in vec2 inst_scale;
 layout(location = 6) in vec3 inst_color;
+layout(location = 7) in vec2 inst_uv_offset;
+layout(location = 8) in vec2 inst_uv_scale;
 
 /* View-projection matrix + texture flag from camera */
 layout(push_constant) uniform PushConstants {
@@ -41,6 +43,10 @@ void main() {
     /* Vertex color × instance color tint */
     frag_color = in_color * inst_color;
 
-    /* Pass UV to fragment shader */
-    frag_uv = in_uv;
+    /* Sprite sheet UV remap: offset + scale per-instance.
+     * If uv_scale == (0,0) (zero-initialized default), pass UV through unchanged. */
+    if (inst_uv_scale.x > 0.0 || inst_uv_scale.y > 0.0)
+        frag_uv = in_uv * inst_uv_scale + inst_uv_offset;
+    else
+        frag_uv = in_uv;
 }

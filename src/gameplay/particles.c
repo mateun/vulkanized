@@ -115,6 +115,12 @@ i32 particles_to_instances(const Particle *particles, i32 count,
         inst->color[0] = p->color[0] * t;
         inst->color[1] = p->color[1] * t;
         inst->color[2] = p->color[2] * t;
+
+        /* No sprite sheet for particles — use full texture (0,0 signals passthrough) */
+        inst->uv_offset[0] = 0.0f;
+        inst->uv_offset[1] = 0.0f;
+        inst->uv_scale[0]  = 0.0f;
+        inst->uv_scale[1]  = 0.0f;
     }
 
     return num;

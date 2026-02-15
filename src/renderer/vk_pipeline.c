@@ -223,6 +223,18 @@ EngineResult vk_create_graphics_pipeline(VulkanContext *ctx) {
             .format   = VK_FORMAT_R32G32B32_SFLOAT,
             .offset   = offsetof(InstanceData, color),
         },
+        { /* inst_uv_offset: location 7, vec2 (per-instance) */
+            .binding  = 1,
+            .location = 7,
+            .format   = VK_FORMAT_R32G32_SFLOAT,
+            .offset   = offsetof(InstanceData, uv_offset),
+        },
+        { /* inst_uv_scale: location 8, vec2 (per-instance) */
+            .binding  = 1,
+            .location = 8,
+            .format   = VK_FORMAT_R32G32_SFLOAT,
+            .offset   = offsetof(InstanceData, uv_scale),
+        },
     };
 
     VkPipelineVertexInputStateCreateInfo vertex_input = {
@@ -667,6 +679,8 @@ EngineResult vk_create_bloom_scene_pipelines(VulkanContext *ctx) {
         { .binding = 1, .location = 4, .format = VK_FORMAT_R32_SFLOAT, .offset = offsetof(InstanceData, rotation) },
         { .binding = 1, .location = 5, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(InstanceData, scale) },
         { .binding = 1, .location = 6, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(InstanceData, color) },
+        { .binding = 1, .location = 7, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(InstanceData, uv_offset) },
+        { .binding = 1, .location = 8, .format = VK_FORMAT_R32G32_SFLOAT, .offset = offsetof(InstanceData, uv_scale) },
     };
 
     VkPipelineVertexInputStateCreateInfo vertex_input = {

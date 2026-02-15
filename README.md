@@ -4,12 +4,13 @@ A lightweight 2D game engine written in C11 with a Vulkan renderer. The engine b
 
 ## Features
 
-- **Vulkan renderer** — instanced mesh drawing, 2D orthographic camera, depth buffering, texture loading (PNG/JPG/BMP via stb_image), text rendering (stb_truetype)
+- **Vulkan renderer** — instanced mesh drawing, 2D orthographic camera, depth buffering, texture loading (PNG/JPG/BMP via stb_image), sprite sheet support, text rendering (stb_truetype)
 - **Bloom post-processing** — 5-pass pipeline with HDR offscreen rendering, brightness extraction, Gaussian blur, and composite for an 80s arcade neon glow
 - **80s arcade effects** — scanlines, chromatic aberration, vignette, and Reinhard tonemapping, all configurable at runtime via `BloomSettings`
 - **Audio** — miniaudio backend with fire-and-forget sound playback, voice pooling (16 overlapping per sound), loop and volume controls, master volume mixing
 - **Collision detection** — circle-circle brute-force (squared distance, no sqrt), single-vs-array, array-vs-array with pair output
 - **Particle system** — circular burst emitter, velocity/spin/lifetime simulation, linear color fade + quadratic scale shrink, swap-remove dead particles
+- **Sprite sheets** — per-instance UV offset/scale for tile selection from atlas textures; `uv_scale={0,0}` defaults to full texture (backwards compatible)
 - **Multi-mesh system** — upload multiple meshes to a shared GPU vertex buffer, draw each with per-instance transforms and color tinting
 - **Camera** — 2D orthographic with position, rotation, zoom, and configurable world-space projection
 - **Text overlay** — screen-space text with alpha blending, independent of the camera
@@ -71,7 +72,14 @@ renderer_create(window, &render_config, &renderer);
 
 /* Upload geometry once */
 renderer_upload_mesh(renderer, vertices, count, &mesh_handle);
-renderer_load_texture(renderer, "assets/sprite.png", &tex_handle);
+renderer_load_texture(renderer, "assets/spritesheet.png", &tex_handle);
+
+/* Sprite sheet: select tile from a 4×4 atlas per instance */
+instance.uv_offset[0] = col / 4.0f;  /* tile column */
+instance.uv_offset[1] = row / 4.0f;  /* tile row */
+instance.uv_scale[0]  = 1.0f / 4.0f; /* tile width in UV space */
+instance.uv_scale[1]  = 1.0f / 4.0f; /* tile height in UV space */
+/* uv_scale={0,0} (default) = use full texture, no sprite sheet */
 
 /* Enable bloom (80s arcade neon glow) */
 renderer_set_bloom(renderer, true, 0.8f, 0.6f);
