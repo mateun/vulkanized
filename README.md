@@ -4,13 +4,14 @@ A lightweight 2D game engine written in C11 with a Vulkan renderer. The engine b
 
 ## Features
 
-- **Vulkan renderer** — instanced mesh drawing, 2D orthographic camera, depth buffering, texture loading (PNG/JPG/BMP via stb_image), sprite sheet support, text rendering (stb_truetype)
+- **Vulkan renderer** — instanced mesh drawing, 2D orthographic camera, depth buffering, texture loading (PNG/JPG/BMP via stb_image), per-texture filter modes (smooth/pixelart), sprite sheet support, text rendering (stb_truetype)
 - **Bloom post-processing** — 5-pass pipeline with HDR offscreen rendering, brightness extraction, Gaussian blur, and composite for an 80s arcade neon glow
 - **80s arcade effects** — scanlines, chromatic aberration, vignette, and Reinhard tonemapping, all configurable at runtime via `BloomSettings`
 - **Audio** — miniaudio backend with fire-and-forget sound playback, voice pooling (16 overlapping per sound), loop and volume controls, master volume mixing
 - **Collision detection** — circle-circle brute-force (squared distance, no sqrt), single-vs-array, array-vs-array with pair output
-- **Particle system** — circular burst emitter, velocity/spin/lifetime simulation, linear color fade + quadratic scale shrink, swap-remove dead particles
+- **Particle system** — circular burst emitter, velocity/spin/lifetime simulation, linear color fade + quadratic scale shrink, swap-remove dead particles, HDR color boost for bloom glow
 - **Sprite sheets** — per-instance UV offset/scale for tile selection from atlas textures; `uv_scale={0,0}` defaults to full texture (backwards compatible)
+- **Texture filtering** — per-texture filter mode selection: `TEXTURE_FILTER_SMOOTH` (bilinear) for general use, `TEXTURE_FILTER_PIXELART` (nearest-neighbor) for crisp pixel art
 - **Multi-mesh system** — upload multiple meshes to a shared GPU vertex buffer, draw each with per-instance transforms and color tinting
 - **Camera** — 2D orthographic with position, rotation, zoom, and configurable world-space projection
 - **Text overlay** — screen-space text with alpha blending, independent of the camera
@@ -38,7 +39,7 @@ cmake --build build --config Debug
 ./build/sample_games/shmup/Debug/shmup.exe
 ```
 
-The shmup sample is a playable shoot-em-up with WASD movement, mouse-click shooting, bullet-enemy collisions with particle explosions and sound effects, score tracking, ghost trail afterimages, and 80s neon bloom. Press ESC to quit.
+The shmup sample is a playable shoot-em-up with WASD movement, mouse-click shooting, pixel art sprite sheet textures, bullet-enemy collisions with HDR particle explosions and sound effects, score tracking, selective bloom (HDR bullets/particles glow, normal enemies don't), and 80s neon bloom. Press ESC to quit.
 
 ## Project Structure
 
@@ -57,7 +58,7 @@ ai_game_engine/
 │   ├── fullscreen.vert     # Fullscreen triangle (bloom passes)
 │   └── bloom_*.frag        # Extract, blur, composite (bloom post-processing)
 ├── sample_games/shmup/     # Shoot-em-up sample game (playable!)
-├── assets/                 # Fonts, textures, sound effects
+├── assets/                 # Fonts, textures, sprite sheets, sound effects
 └── third_party/            # stb, miniaudio (header-only)
 ```
 
@@ -72,7 +73,7 @@ renderer_create(window, &render_config, &renderer);
 
 /* Upload geometry once */
 renderer_upload_mesh(renderer, vertices, count, &mesh_handle);
-renderer_load_texture(renderer, "assets/spritesheet.png", &tex_handle);
+renderer_load_texture(renderer, "assets/spritesheet.png", TEXTURE_FILTER_PIXELART, &tex_handle);
 
 /* Sprite sheet: select tile from a 4×4 atlas per instance */
 instance.uv_offset[0] = col / 4.0f;  /* tile column */

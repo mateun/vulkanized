@@ -77,8 +77,12 @@ ai_game_engine/
 │   └── bloom_composite.frag             # Composite + tonemap + scanlines + aberration
 ├── assets/                # Textures, audio, fonts
 │   ├── consolas.ttf       # Font for text rendering
+│   ├── 8bit_shmup_spritesheet.png  # 6×6 tile sprite sheet (pixel art)
+│   ├── hero.png           # Player ship texture
+│   ├── blob.png           # Enemy blob texture
 │   ├── shoot.wav          # Retro laser chirp (100ms)
-│   └── explosion.wav      # Noise-burst explosion (400ms)
+│   ├── explosion.wav      # Noise-burst explosion (400ms)
+│   └── menu_song.wav      # Background music track
 ├── tools/                 # Standalone utilities
 │   └── gen_sounds.c       # Procedural WAV generator
 └── third_party/           # Vendored header-only libs
@@ -104,7 +108,7 @@ renderer_end_frame(renderer);
 
 /* Geometry & textures */
 renderer_upload_mesh(renderer, vertices, count, &mesh_handle);
-renderer_load_texture(renderer, "path.png", &tex_handle);  /* sprite sheet atlas */
+renderer_load_texture(renderer, "path.png", filter, &tex_handle);  /* TextureFilter: SMOOTH or PIXELART */
 
 /* Sprite sheet tile selection (per-instance UV remapping)
  * Set uv_offset/uv_scale on InstanceData to pick a tile from a texture atlas.
@@ -174,6 +178,7 @@ particles_to_instances(particles, count, out_instances, max_instances);
 - [x] Bloom post-processing (5-pass: HDR scene, brightness extract, Gaussian blur, composite)
 - [x] 80s arcade effects (scanlines, chromatic aberration, vignette, Reinhard tonemap)
 - [x] Sprite sheet support (per-instance UV offset/scale for tile selection from atlas textures)
+- [x] Per-texture filter modes (TEXTURE_FILTER_SMOOTH / TEXTURE_FILTER_PIXELART)
 - **Milestone: textured sprites with neon bloom on screen**
 
 ### Phase 2.5: Gameplay Utilities
@@ -233,14 +238,15 @@ cmake --build build --config Debug
 - Phase 3 complete: miniaudio integration with fire-and-forget voice pooling
 - Engine is a static library (`engine.lib`); games link against it
 - Sample game `shmup` is a playable shoot-em-up:
-  - WASD movement with ghost trail afterimage effect
-  - Left-click to shoot bullets (with laser chirp SFX)
-  - Bullet-enemy collision → particle explosion + explosion SFX
+  - WASD movement, left-click to shoot
+  - Sprite sheet textures (6×6 pixel art atlas, nearest-neighbor filtering)
+  - Bullet-enemy collision → HDR particle explosion (6× color boost) + explosion SFX
   - Enemy-player collision → flash damage feedback
-  - Score tracking, neon HDR colors, 80s bloom effects
-- **Renderer**: instanced drawing, 2D camera, textures, sprite sheet UV tiling, bloom (5-pass HDR pipeline), text overlay
+  - Score tracking, selective bloom (HDR bullets/particles glow, normal enemies don't)
+- **Renderer**: instanced drawing, 2D camera, textures, sprite sheet UV tiling, per-texture filter modes, bloom (5-pass HDR pipeline), text overlay
 - **Audio**: miniaudio backend, WAV/MP3/FLAC/OGG loading, voice pool (16 overlapping per sound), master volume
 - **Collision**: circle-circle (squared distance, no sqrt), single-vs-array, array-vs-array with CollisionPair output
-- **Particles**: circular burst emitter, velocity/spin/lifetime simulation, linear color fade + quadratic scale shrink, swap-remove dead
+- **Particles**: circular burst emitter, velocity/spin/lifetime simulation, linear color fade + quadratic scale shrink, swap-remove dead, HDR color boost for bloom
+- **Textures**: per-texture filter mode (TEXTURE_FILTER_SMOOTH for bilinear, TEXTURE_FILTER_PIXELART for nearest-neighbor)
 - VSync off (IMMEDIATE present mode) for uncapped FPS
 - Next: background music/crossfade, gameplay framework (ECS, Lua scripting)

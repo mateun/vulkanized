@@ -39,8 +39,10 @@ EngineResult renderer_upload_mesh(Renderer *renderer,
                                   MeshHandle *out_handle);
 
 /* Texture loading — decodes an image file (PNG/JPG/BMP) and uploads to GPU.
+ * filter: TEXTURE_FILTER_PIXELART for sharp pixels, TEXTURE_FILTER_SMOOTH for bilinear.
  * Returns a TextureHandle for use with renderer_draw_mesh_textured(). */
 EngineResult renderer_load_texture(Renderer *renderer, const char *path,
+                                   TextureFilter filter,
                                    TextureHandle *out_handle);
 
 /* Instanced mesh draw — call between begin_frame and end_frame.

@@ -336,7 +336,8 @@ EngineResult renderer_create(Window *window, const RendererConfig *config,
     {
         u8 white_pixel[] = { 255, 255, 255, 255 };
         res = vk_create_texture(&r->vk, white_pixel, 1, 1,
-                                VK_FORMAT_R8G8B8A8_SRGB, &r->vk.dummy_texture);
+                                VK_FORMAT_R8G8B8A8_SRGB, VK_FILTER_NEAREST,
+                                &r->vk.dummy_texture);
         if (res != ENGINE_SUCCESS) goto fail;
 
         VkDescriptorSetAllocateInfo alloc_info = {
@@ -610,6 +611,7 @@ void renderer_draw_mesh_textured(Renderer *renderer, MeshHandle mesh,
 }
 
 EngineResult renderer_load_texture(Renderer *renderer, const char *path,
+                                    TextureFilter filter,
                                     TextureHandle *out_handle) {
     VulkanContext *vk = &renderer->vk;
 
@@ -617,6 +619,11 @@ EngineResult renderer_load_texture(Renderer *renderer, const char *path,
         LOG_ERROR("Texture table full (%u/%u)", vk->texture_count, MAX_TEXTURES);
         return ENGINE_ERROR_VULKAN_INIT;
     }
+
+    /* Map public enum to Vulkan filter */
+    VkFilter vk_filter = (filter == TEXTURE_FILTER_PIXELART)
+        ? VK_FILTER_NEAREST
+        : VK_FILTER_LINEAR;
 
     /* Decode image file with stb_image */
     int width, height, channels;
@@ -629,7 +636,7 @@ EngineResult renderer_load_texture(Renderer *renderer, const char *path,
     /* Upload to GPU */
     TextureHandle handle = (TextureHandle)vk->texture_count;
     EngineResult res = vk_create_texture(vk, pixels, (u32)width, (u32)height,
-                                          VK_FORMAT_R8G8B8A8_SRGB,
+                                          VK_FORMAT_R8G8B8A8_SRGB, vk_filter,
                                           &vk->textures[handle]);
     stbi_image_free(pixels);
 

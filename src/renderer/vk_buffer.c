@@ -238,6 +238,7 @@ EngineResult vk_create_texture(VulkanContext *ctx,
                                const u8 *pixels,
                                u32 width, u32 height,
                                VkFormat format,
+                               VkFilter filter,
                                VulkanTexture *out_tex)
 {
     u32 pixel_size = (format == VK_FORMAT_R8_UNORM) ? 1 : 4;
@@ -350,15 +351,18 @@ EngineResult vk_create_texture(VulkanContext *ctx,
         return ENGINE_ERROR_VULKAN_INIT;
     }
 
-    /* Sampler */
+    /* Sampler — filter passed from caller (NEAREST for pixel art, LINEAR for smooth) */
+    VkSamplerMipmapMode mip_mode = (filter == VK_FILTER_NEAREST)
+        ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+        : VK_SAMPLER_MIPMAP_MODE_LINEAR;
     VkSamplerCreateInfo sampler_info = {
         .sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .magFilter    = VK_FILTER_LINEAR,
-        .minFilter    = VK_FILTER_LINEAR,
+        .magFilter    = filter,
+        .minFilter    = filter,
         .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
         .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .mipmapMode   = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .mipmapMode   = mip_mode,
     };
 
     if (vkCreateSampler(ctx->device, &sampler_info, NULL, &out_tex->sampler) != VK_SUCCESS) {

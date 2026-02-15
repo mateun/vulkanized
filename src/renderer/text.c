@@ -65,7 +65,8 @@ EngineResult text_init(VulkanContext *ctx, const char *font_path, f32 font_size)
 
     /* Upload atlas as R8 texture */
     EngineResult res = vk_create_texture(ctx, atlas_bitmap, ATLAS_WIDTH, ATLAS_HEIGHT,
-                                          VK_FORMAT_R8_UNORM, &ctx->font_atlas);
+                                          VK_FORMAT_R8_UNORM, VK_FILTER_LINEAR,
+                                          &ctx->font_atlas);
     free(atlas_bitmap);
     if (res != ENGINE_SUCCESS) return res;
 

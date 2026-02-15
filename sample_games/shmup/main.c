@@ -75,17 +75,28 @@ int main(void) {
     /* Load sound effects */
     SoundHandle snd_shoot     = {0};
     SoundHandle snd_explosion = {0};
+    SoundHandle snd_menu_song = {0};
     bool has_audio = (audio != NULL);
     if (has_audio) {
         if (audio_load_sound(audio, "assets/shoot.wav", &snd_shoot) != ENGINE_SUCCESS)
             LOG_WARN("Could not load shoot.wav");
         if (audio_load_sound(audio, "assets/explosion.wav", &snd_explosion) != ENGINE_SUCCESS)
             LOG_WARN("Could not load explosion.wav");
+        if (audio_load_sound(audio, "assets/menu_song.wav", &snd_menu_song) != ENGINE_SUCCESS)
+            LOG_WARN("Could not load shoot.wav");
     }
+
+    if (has_audio) audio_play_sound(audio, snd_menu_song, true, 0.5f);
+
+    // Load main spritesheet
+    TextureHandle texSpriteSheet;
+    renderer_load_texture(renderer, "assets/8bit_shmup_spritesheet.png",
+                          TEXTURE_FILTER_PIXELART, &texSpriteSheet);
 
     // Load some textures:
     TextureHandle  heroTexture;
-    renderer_load_texture(renderer, "assets/blob.png", &heroTexture);
+    renderer_load_texture(renderer, "assets/blob.png",
+                          TEXTURE_FILTER_SMOOTH, &heroTexture);
 
     Camera2D *camera = (Camera2D *)calloc(1, sizeof(Camera2D));
     camera->zoom        = 2.0f;
@@ -148,10 +159,15 @@ int main(void) {
     }
 
     /* ---- Enable bloom (80s arcade neon glow) ---- */
-    renderer_set_bloom(renderer, true, 0.8f, 0.6f);
+    renderer_set_bloom(renderer, true, 0.8f, 1.2f);
 
     /* ---- Generate instances ---- */
     srand((unsigned)time(NULL));
+
+    static const f32 normal_color[][3] = {
+            {0.8, 0.9, 0.6},
+            {0.2, 1.0, 0.2}
+    };
 
     /* Neon color palette — HDR values > 1.0 glow through the bloom threshold */
     static const f32 neon_colors[][3] = {
@@ -175,17 +191,28 @@ int main(void) {
         enemies[i].scale[0]    = 2.0f;
         enemies[i].scale[1]    = 2.0f;
         int ci = rand() % num_neon;
-        enemies[i].color[0]    = neon_colors[ci][0];
-        enemies[i].color[1]    = neon_colors[ci][1];
-        enemies[i].color[2]    = neon_colors[ci][2];
+        enemies[i].color[0]    = normal_color[1][0];
+        enemies[i].color[1]    = normal_color[1][1];
+        enemies[i].color[2]    = normal_color[1][2];
+        enemies[i].uv_offset[0] = 3.0f / 6.0f;
+        enemies[i].uv_offset[1] = 0.0f / 6.0f;
+        enemies[i].uv_scale[0] = 1.0f / 6.0f;
+        enemies[i].uv_scale[1] = 1.0f / 6.0f;
+
+
+
     }
 
     /* Player (triangle, bright cyan — HDR so it glows) */
     InstanceData player = {
         .position = { 0.0f, 0.0f },
-        .rotation = 0.0f,
+        .rotation = 3.1416f,
         .scale    = { 2.0f, 2.0f },
-        .color    = { 0.2f, 1.8f, 2.0f },
+        .color    = { 1.0f, 1.0f, 1.0f },
+        .uv_offset[0] = 0.0f / 6.0f,
+        .uv_offset[1] = 0.0f / 6.0f,
+        .uv_scale[0] = 1.0f / 6.0f,
+        .uv_scale[1] = 1.0f / 6.0f,
     };
 
     /* ---- Game state ---- */
@@ -298,7 +325,7 @@ int main(void) {
                 if (enemy_dead[i]) {
                     ParticleEmitter explosion = {
                         .position = { enemies[i].position[0], enemies[i].position[1] },
-                        .color    = { enemies[i].color[0], enemies[i].color[1], enemies[i].color[2] },
+                        .color    = { enemies[i].color[0] * 6.0f, enemies[i].color[1] * 6.0f, enemies[i].color[2] * 6.0f },
                         .count              = 24,
                         .speed_min          = 3.0f,
                         .speed_max          = 10.0f,
@@ -345,9 +372,9 @@ int main(void) {
                 hit_flash_timer = 0.0f;
                 player_hit = false;
                 /* Restore player color */
-                player.color[0] = 0.2f;
-                player.color[1] = 1.8f;
-                player.color[2] = 2.0f;
+                player.color[0] = 1.0f;
+                player.color[1] = 1.0f;
+                player.color[2] = 1.0f;
             } else {
                 /* Flash red/white */
                 f32 flash = (hit_flash_timer * 10.0f);
@@ -412,12 +439,13 @@ int main(void) {
 
         /* Draw ghost trail (behind player), then enemies, player, bullets */
         if (trail_draw_count > 0) {
-            renderer_draw_mesh(renderer, mesh_triangle, trail_instances, (u32)trail_draw_count);
+           // renderer_draw_mesh(renderer, mesh_quad, trail_instances, (u32)trail_draw_count);
         }
         if (num_enemies > 0) {
-            renderer_draw_mesh_textured(renderer, mesh_quad, heroTexture, enemies, (u32)num_enemies);
+            renderer_draw_mesh_textured(renderer, mesh_quad, texSpriteSheet, enemies, (u32)num_enemies);
         }
-        renderer_draw_mesh(renderer, mesh_triangle, &player, 1);
+        renderer_draw_mesh_textured(renderer, mesh_quad, texSpriteSheet, &player, 1);
+
         if (num_bullets > 0) {
             renderer_draw_mesh(renderer, mesh_bullet, bullets, (u32)num_bullets);
         }

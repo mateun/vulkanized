@@ -20,11 +20,13 @@ EngineResult vk_upload_mesh(VulkanContext *ctx,
                             const Vertex *vertices, u32 vertex_count,
                             MeshHandle *out_handle);
 
-/* Create a texture from raw pixel data (R8 single-channel or RGBA). */
+/* Create a texture from raw pixel data (R8 single-channel or RGBA).
+ * filter: VK_FILTER_NEAREST for pixel art, VK_FILTER_LINEAR for smooth. */
 EngineResult vk_create_texture(VulkanContext *ctx,
                                const u8 *pixels,
                                u32 width, u32 height,
                                VkFormat format,
+                               VkFilter filter,
                                VulkanTexture *out_tex);
 
 /* Destroy a texture and free its resources. */

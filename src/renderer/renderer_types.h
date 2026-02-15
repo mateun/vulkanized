@@ -42,6 +42,13 @@ typedef struct {
 typedef u32 MeshHandle;
 #define MESH_HANDLE_INVALID ((MeshHandle)0xFFFFFFFF)
 
+/* ---- Texture filter mode (passed to renderer_load_texture) ---- */
+
+typedef enum {
+    TEXTURE_FILTER_SMOOTH,    /* bilinear filtering — good for photos, gradients */
+    TEXTURE_FILTER_PIXELART,  /* nearest-neighbor — sharp pixels, no blurring */
+} TextureFilter;
+
 /* ---- Texture handle (opaque to the game, returned by renderer_load_texture) ---- */
 
 typedef u32 TextureHandle;
