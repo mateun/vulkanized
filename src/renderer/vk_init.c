@@ -253,17 +253,30 @@ EngineResult vk_create_instance(VulkanContext *ctx) {
 #ifdef ENGINE_DEBUG
     ext_count++; /* VK_EXT_debug_utils */
 #endif
+#ifdef __APPLE__
+    ext_count++; /* VK_KHR_portability_enumeration */
+#endif
 
     const char **extensions = malloc(sizeof(char *) * ext_count);
+    u32 write_idx = 0;
     for (u32 i = 0; i < glfw_ext_count; i++) {
-        extensions[i] = glfw_exts[i];
+        extensions[write_idx++] = glfw_exts[i];
     }
 #ifdef ENGINE_DEBUG
-    extensions[glfw_ext_count] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    extensions[write_idx++] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+#endif
+#ifdef __APPLE__
+    extensions[write_idx++] = "VK_KHR_portability_enumeration";
+#endif
+
+    VkInstanceCreateFlags instance_flags = 0;
+#ifdef __APPLE__
+    instance_flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 #endif
 
     VkInstanceCreateInfo create_info = {
         .sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .flags                   = instance_flags,
         .pApplicationInfo        = &app_info,
         .enabledExtensionCount   = ext_count,
         .ppEnabledExtensionNames = extensions,
@@ -367,6 +380,24 @@ EngineResult vk_pick_physical_device(VulkanContext *ctx) {
     return ENGINE_SUCCESS;
 }
 
+#ifdef __APPLE__
+static bool device_supports_portability_subset(VkPhysicalDevice device) {
+    u32 count;
+    vkEnumerateDeviceExtensionProperties(device, NULL, &count, NULL);
+    VkExtensionProperties *props = malloc(sizeof(VkExtensionProperties) * count);
+    vkEnumerateDeviceExtensionProperties(device, NULL, &count, props);
+    bool found = false;
+    for (u32 i = 0; i < count; i++) {
+        if (strcmp(props[i].extensionName, "VK_KHR_portability_subset") == 0) {
+            found = true;
+            break;
+        }
+    }
+    free(props);
+    return found;
+}
+#endif
+
 EngineResult vk_create_logical_device(VulkanContext *ctx) {
     QueueFamilyIndices indices = find_queue_families(ctx->physical_device, ctx->surface);
     ctx->graphics_family = indices.graphics;
@@ -389,13 +420,24 @@ EngineResult vk_create_logical_device(VulkanContext *ctx) {
 
     VkPhysicalDeviceFeatures features = {0};
 
+    /* Build device extension list — base + optional portability subset */
+    const char *enabled_exts[4];
+    u32 enabled_ext_count = 0;
+    enabled_exts[enabled_ext_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+#ifdef __APPLE__
+    if (device_supports_portability_subset(ctx->physical_device)) {
+        enabled_exts[enabled_ext_count++] = "VK_KHR_portability_subset";
+        LOG_INFO("Enabling VK_KHR_portability_subset (MoltenVK)");
+    }
+#endif
+
     VkDeviceCreateInfo create_info = {
         .sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .queueCreateInfoCount    = unique_count,
         .pQueueCreateInfos       = queue_infos,
         .pEnabledFeatures        = &features,
-        .enabledExtensionCount   = device_extension_count,
-        .ppEnabledExtensionNames = device_extensions,
+        .enabledExtensionCount   = enabled_ext_count,
+        .ppEnabledExtensionNames = enabled_exts,
         .enabledLayerCount       = validation_layer_count,
         .ppEnabledLayerNames     = validation_layers,
     };

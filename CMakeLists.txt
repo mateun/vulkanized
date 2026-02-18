@@ -67,11 +67,26 @@ target_link_libraries(engine PUBLIC
     cglm
 )
 
+if(APPLE)
+    target_link_libraries(engine PUBLIC
+        "-framework CoreFoundation"
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework Cocoa"
+        "-framework IOKit"
+        "-framework QuartzCore"
+    )
+endif()
+
 # Enable validation-friendly warnings
 if(MSVC)
     target_compile_options(engine PRIVATE /W4)
 else()
     target_compile_options(engine PRIVATE -Wall -Wextra -Wpedantic)
+    if(APPLE)
+        # miniaudio uses deprecated CoreAudio APIs
+        target_compile_options(engine PRIVATE -Wno-deprecated-declarations)
+    endif()
 endif()
 
 # Debug defines
