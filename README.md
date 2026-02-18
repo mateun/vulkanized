@@ -1,6 +1,6 @@
 # AI Game Engine
 
-A lightweight 2D game engine written in C11 with a Vulkan renderer. The engine builds as a static library — games link against it and own the main loop.
+A lightweight 2D game engine written in C11 with a Vulkan renderer. Runs on Windows (native Vulkan) and macOS (MoltenVK). The engine builds as a static library — games link against it and own the main loop.
 
 ## Features
 
@@ -23,20 +23,25 @@ A lightweight 2D game engine written in C11 with a Vulkan renderer. The engine b
 - **Vulkan SDK** (LunarG) with `glslc` on PATH
 - **CMake** 3.20+
 - **C11 compiler** (MSVC, GCC, or Clang)
+- **macOS**: LunarG Vulkan SDK for macOS (provides MoltenVK)
 
 GLFW and cglm are fetched automatically via CMake FetchContent.
 
-## Build
+## Build & Run
 
+### Windows
 ```bash
 cmake -B build -S .
 cmake --build build --config Debug
+./build/sample_games/shmup/Debug/shmup.exe
 ```
 
-## Run
-
+### macOS
 ```bash
-./build/sample_games/shmup/Debug/shmup.exe
+source ~/VulkanSDK/<version>/setup-env.sh
+cmake -B build -S .
+cmake --build build
+./build/sample_games/shmup/shmup
 ```
 
 The shmup sample is a playable shoot-em-up with WASD movement, mouse-click shooting, pixel art sprite sheet textures, bullet-enemy collisions with HDR particle explosions and sound effects, score tracking, selective bloom (HDR bullets/particles glow, normal enemies don't), and 80s neon bloom. Press ESC to quit.

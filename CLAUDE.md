@@ -6,7 +6,7 @@ A small game engine written in C with three main subsystems:
 2. **Audio** — Sound effects and background music playback
 3. **Gameplay** — GameObject/Component architecture with runtime scripting
 
-The engine builds as a **static library** (`engine.lib`). Games link against it and own
+The engine builds as a **static library** (`engine.lib` / `libengine.a`). Games link against it and own
 the main loop, calling engine functions directly.
 
 ## Architecture Decisions
@@ -20,9 +20,11 @@ the main loop, calling engine functions directly.
 - Handles Vulkan SDK discovery and shader compilation
 - Engine is a static library; sample games are separate executables
 
-### Platform: Windows (primary), Linux (future)
-- Development on Windows 11
-- Vulkan chosen for cross-platform GPU access
+### Platform: Windows + macOS
+- Windows: native Vulkan via LunarG SDK
+- macOS: Vulkan via MoltenVK (bundled with LunarG macOS SDK), translates Vulkan to Metal
+- macOS requires `VK_KHR_portability_enumeration` (instance) and `VK_KHR_portability_subset` (device) — handled via `#ifdef __APPLE__` in `vk_init.c`
+- Linux: future
 
 ### Dependencies (planned)
 | Library | Purpose | Notes |
@@ -212,23 +214,40 @@ particles_to_instances(particles, count, out_instances, max_instances);
 - [ ] Simple scene serialization
 
 ## Build & Run
+
+### Windows
 ```bash
-# Configure
 cmake -B build -S .
-
-# Build
 cmake --build build --config Debug
-
-# Run shmup sample
 ./build/sample_games/shmup/Debug/shmup.exe
 ```
 
+### macOS
+```bash
+# Source the Vulkan SDK environment first
+source ~/VulkanSDK/<version>/setup-env.sh
+
+cmake -B build -S .
+cmake --build build
+./build/sample_games/shmup/shmup
+```
+
+Requires the [LunarG Vulkan SDK for macOS](https://vulkan.lunarg.com/sdk/home) (provides MoltenVK, glslc, validation layers).
+
 ## Environment
+
+### Windows
 - Vulkan SDK: `D:\Programs\VulkanSDK` (API 1.4.304)
 - CMake: 4.1.2 at `D:\Programs\cmake\bin\cmake.exe`
 - Compiler: MSVC 19.38 (VS 2022 Community)
 - glslc: in PATH via Vulkan SDK
 - Generator: Visual Studio 17 2022 (x64)
+
+### macOS
+- Vulkan SDK: LunarG macOS SDK (MoltenVK)
+- Compiler: AppleClang (Xcode)
+- Generator: Unix Makefiles (default)
+- Apple frameworks linked automatically: CoreFoundation, CoreAudio, AudioToolbox, Cocoa, IOKit, QuartzCore
 
 ## Current Status
 **Phase 3 complete — Audio, collision, particles all working.**
@@ -236,7 +255,8 @@ cmake --build build --config Debug
 - Phase 2 complete: textured instanced rendering, camera, depth, resize, bloom
 - Phase 2.5 complete: collision detection, particle explosions, mouse input
 - Phase 3 complete: miniaudio integration with fire-and-forget voice pooling
-- Engine is a static library (`engine.lib`); games link against it
+- Engine is a static library (`engine.lib` / `libengine.a`); games link against it
+- macOS supported via MoltenVK (Vulkan-over-Metal), tested on Apple M4
 - Sample game `shmup` is a playable shoot-em-up:
   - WASD movement, left-click to shoot
   - Sprite sheet textures (6×6 pixel art atlas, nearest-neighbor filtering)
