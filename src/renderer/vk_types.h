@@ -8,6 +8,8 @@
 #define MAX_MESHES           32
 #define MAX_TEXTURES         64
 #define MAX_DRAW_COMMANDS    256
+#define MAX_VERTICES_3D      65536
+#define MAX_INDICES          131072
 
 /* ---- Texture handle ---- */
 
@@ -20,11 +22,14 @@ typedef struct {
     u32            height;
 } VulkanTexture;
 
-/* ---- Mesh slot (region within the shared vertex buffer) ---- */
+/* ---- Mesh slot (region within a shared vertex buffer) ---- */
 
 typedef struct {
-    u32 first_vertex;  /* offset into the shared vertex buffer */
-    u32 vertex_count;  /* number of vertices in this mesh */
+    u32  first_vertex;  /* offset into the shared vertex buffer */
+    u32  vertex_count;  /* number of vertices in this mesh */
+    bool is_3d;         /* true = Vertex3D format, false = Vertex (2D) */
+    u32  first_index;   /* offset into the shared index buffer (3D only) */
+    u32  index_count;   /* 0 = non-indexed draw */
 } MeshSlot;
 
 /* ---- Per-frame draw command (queued by renderer_draw_mesh) ---- */
@@ -70,6 +75,7 @@ typedef struct {
     /* Scene pipelines (geometry + text, for HDR render pass) */
     VkPipeline     scene_graphics_pipeline;
     VkPipeline     scene_text_pipeline;
+    VkPipeline     scene_3d_pipeline;        /* 3D geometry for HDR scene pass */
 
     /* Post-processing pipelines */
     VkPipelineLayout extract_layout;
@@ -184,6 +190,44 @@ typedef struct VulkanContext {
     void                    *text_vertex_mapped;   /* persistently mapped pointer */
     u32                      text_vertex_count;
     u32                      text_vertex_capacity;
+
+    /* ---- 3D rendering ---- */
+
+    /* 3D pipeline */
+    VkPipelineLayout         pipeline_layout_3d;
+    VkPipeline               graphics_pipeline_3d;
+
+    /* 3D vertex buffer (separate from 2D, GPU-local) */
+    VkBuffer                 vertex_buffer_3d;
+    VkDeviceMemory           vertex_buffer_3d_memory;
+    u32                      vertex_3d_total;
+
+    /* Index buffer (shared, GPU-local, for 3D meshes) */
+    VkBuffer                 index_buffer;
+    VkDeviceMemory           index_buffer_memory;
+    u32                      index_total;
+
+    /* 3D instance buffer (CPU-visible, persistently mapped) */
+    VkBuffer                 instance_buffer_3d;
+    VkDeviceMemory           instance_buffer_3d_memory;
+    void                    *instance_3d_mapped;
+    u32                      instance_3d_count;
+    u32                      instance_3d_capacity;
+
+    /* Light UBO (single directional light) */
+    VkBuffer                 light_ubo;
+    VkDeviceMemory           light_ubo_memory;
+    void                    *light_ubo_mapped;
+    VkDescriptorSetLayout    light_desc_set_layout;
+    VkDescriptorPool         light_desc_pool;
+    VkDescriptorSet          light_desc_set;
+
+    /* 3D draw commands */
+    DrawCommand              draw_commands_3d[MAX_DRAW_COMMANDS];
+    u32                      draw_command_3d_count;
+
+    /* Cached camera position (for specular lighting) */
+    float                    view_position[3];
 
     /* Bloom post-processing */
     BloomContext             bloom;

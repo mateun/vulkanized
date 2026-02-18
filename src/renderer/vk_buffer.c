@@ -184,6 +184,138 @@ EngineResult vk_upload_mesh(VulkanContext *ctx,
 }
 
 /* --------------------------------------------------------------------------
+ * 3D vertex buffer (pre-allocated GPU-local, separate from 2D buffer)
+ * ------------------------------------------------------------------------ */
+
+EngineResult vk_create_vertex_buffer_3d(VulkanContext *ctx, u32 max_vertices) {
+    VkDeviceSize buf_size = sizeof(Vertex3D) * max_vertices;
+
+    EngineResult res = vk_create_buffer(ctx, buf_size,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        &ctx->vertex_buffer_3d, &ctx->vertex_buffer_3d_memory);
+    if (res != ENGINE_SUCCESS) return res;
+
+    ctx->vertex_3d_total = 0;
+
+    LOG_INFO("3D vertex buffer created: capacity %u vertices (%llu bytes)",
+             max_vertices, (unsigned long long)buf_size);
+    return ENGINE_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
+ * Shared index buffer (pre-allocated GPU-local)
+ * ------------------------------------------------------------------------ */
+
+EngineResult vk_create_index_buffer(VulkanContext *ctx, u32 max_indices) {
+    VkDeviceSize buf_size = sizeof(u32) * max_indices;
+
+    EngineResult res = vk_create_buffer(ctx, buf_size,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        &ctx->index_buffer, &ctx->index_buffer_memory);
+    if (res != ENGINE_SUCCESS) return res;
+
+    ctx->index_total = 0;
+
+    LOG_INFO("Index buffer created: capacity %u indices (%llu bytes)",
+             max_indices, (unsigned long long)buf_size);
+    return ENGINE_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
+ * 3D mesh upload (vertices + optional indices via staging)
+ * ------------------------------------------------------------------------ */
+
+EngineResult vk_upload_mesh_3d(VulkanContext *ctx,
+                               const Vertex3D *vertices, u32 vertex_count,
+                               const u32 *indices, u32 index_count,
+                               MeshHandle *out_handle)
+{
+    if (ctx->mesh_count >= MAX_MESHES) {
+        LOG_ERROR("Mesh table full (%u/%u)", ctx->mesh_count, MAX_MESHES);
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    /* Upload vertices */
+    VkDeviceSize vert_size   = sizeof(Vertex3D) * vertex_count;
+    VkDeviceSize vert_offset = sizeof(Vertex3D) * ctx->vertex_3d_total;
+
+    VkBuffer staging_buf;
+    VkDeviceMemory staging_mem;
+    EngineResult res = vk_create_buffer(ctx, vert_size,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        &staging_buf, &staging_mem);
+    if (res != ENGINE_SUCCESS) return res;
+
+    void *mapped;
+    vkMapMemory(ctx->device, staging_mem, 0, vert_size, 0, &mapped);
+    memcpy(mapped, vertices, (size_t)vert_size);
+    vkUnmapMemory(ctx->device, staging_mem);
+
+    VkCommandBuffer cmd = vk_begin_single_command(ctx);
+    VkBufferCopy copy_region = {
+        .srcOffset = 0,
+        .dstOffset = vert_offset,
+        .size      = vert_size,
+    };
+    vkCmdCopyBuffer(cmd, staging_buf, ctx->vertex_buffer_3d, 1, &copy_region);
+    vk_end_single_command(ctx, cmd);
+
+    vkDestroyBuffer(ctx->device, staging_buf, NULL);
+    vkFreeMemory(ctx->device, staging_mem, NULL);
+
+    /* Upload indices (if any) */
+    u32 first_index = 0;
+    if (indices && index_count > 0) {
+        VkDeviceSize idx_size   = sizeof(u32) * index_count;
+        VkDeviceSize idx_offset = sizeof(u32) * ctx->index_total;
+
+        res = vk_create_buffer(ctx, idx_size,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging_buf, &staging_mem);
+        if (res != ENGINE_SUCCESS) return res;
+
+        vkMapMemory(ctx->device, staging_mem, 0, idx_size, 0, &mapped);
+        memcpy(mapped, indices, (size_t)idx_size);
+        vkUnmapMemory(ctx->device, staging_mem);
+
+        cmd = vk_begin_single_command(ctx);
+        VkBufferCopy idx_copy = {
+            .srcOffset = 0,
+            .dstOffset = idx_offset,
+            .size      = idx_size,
+        };
+        vkCmdCopyBuffer(cmd, staging_buf, ctx->index_buffer, 1, &idx_copy);
+        vk_end_single_command(ctx, cmd);
+
+        vkDestroyBuffer(ctx->device, staging_buf, NULL);
+        vkFreeMemory(ctx->device, staging_mem, NULL);
+
+        first_index = ctx->index_total;
+        ctx->index_total += index_count;
+    }
+
+    /* Register mesh slot */
+    MeshHandle handle = (MeshHandle)ctx->mesh_count;
+    ctx->meshes[handle].first_vertex = ctx->vertex_3d_total;
+    ctx->meshes[handle].vertex_count = vertex_count;
+    ctx->meshes[handle].is_3d        = true;
+    ctx->meshes[handle].first_index  = first_index;
+    ctx->meshes[handle].index_count  = index_count;
+    ctx->vertex_3d_total += vertex_count;
+    ctx->mesh_count++;
+
+    *out_handle = handle;
+
+    LOG_INFO("3D mesh %u uploaded: %u vertices, %u indices",
+             handle, vertex_count, index_count);
+    return ENGINE_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
  * Texture creation (staging -> GPU-local VkImage)
  * ------------------------------------------------------------------------ */
 

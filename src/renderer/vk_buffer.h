@@ -32,6 +32,18 @@ EngineResult vk_create_texture(VulkanContext *ctx,
 /* Destroy a texture and free its resources. */
 void vk_destroy_texture(VulkanContext *ctx, VulkanTexture *tex);
 
+/* 3D vertex buffer (GPU-local, separate from 2D). */
+EngineResult vk_create_vertex_buffer_3d(VulkanContext *ctx, u32 max_vertices);
+
+/* Shared index buffer (GPU-local). */
+EngineResult vk_create_index_buffer(VulkanContext *ctx, u32 max_indices);
+
+/* Upload a 3D mesh (vertices + optional indices). */
+EngineResult vk_upload_mesh_3d(VulkanContext *ctx,
+                               const Vertex3D *vertices, u32 vertex_count,
+                               const u32 *indices, u32 index_count,
+                               MeshHandle *out_handle);
+
 /* One-shot command helpers (exposed for text module). */
 VkCommandBuffer vk_begin_single_command(VulkanContext *ctx);
 void            vk_end_single_command(VulkanContext *ctx, VkCommandBuffer cmd);

@@ -49,6 +49,44 @@ typedef enum {
     TEXTURE_FILTER_PIXELART,  /* nearest-neighbor — sharp pixels, no blurring */
 } TextureFilter;
 
+/* ---- 3D Vertex format ---- */
+
+typedef struct {
+    f32 position[3]; /* x, y, z */
+    f32 normal[3];   /* nx, ny, nz */
+    f32 uv[2];       /* u, v */
+    f32 color[3];    /* r, g, b */
+} Vertex3D;          /* 44 bytes */
+
+/* ---- 3D Per-instance data ---- */
+
+typedef struct {
+    f32 position[3]; /* x, y, z world position */
+    f32 rotation[3]; /* pitch, yaw, roll (Euler angles, radians) */
+    f32 scale[3];    /* x, y, z scale */
+    f32 color[3];    /* r, g, b — multiplied with vertex color */
+} InstanceData3D;    /* 48 bytes */
+
+/* ---- 3D Camera ---- */
+
+typedef struct {
+    f32 position[3]; /* eye position in world space */
+    f32 target[3];   /* look-at target */
+    f32 up[3];       /* up vector (typically 0,1,0) */
+    f32 fov;         /* vertical field of view in degrees */
+    f32 near_plane;  /* near clipping plane */
+    f32 far_plane;   /* far clipping plane */
+} Camera3D;
+
+/* ---- Directional light ---- */
+
+typedef struct {
+    f32 direction[3]; /* normalized, pointing FROM light toward scene */
+    f32 color[3];     /* light color (r, g, b) */
+    f32 ambient[3];   /* ambient light color (r, g, b) */
+    f32 shininess;    /* specular exponent (e.g. 32.0) */
+} DirectionalLight;
+
 /* ---- Texture handle (opaque to the game, returned by renderer_load_texture) ---- */
 
 typedef u32 TextureHandle;

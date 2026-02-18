@@ -112,6 +112,68 @@ static void record_geometry_draws(VulkanContext *vk, VkCommandBuffer cmd, VkPipe
 }
 
 /* --------------------------------------------------------------------------
+ * Helper: record 3D geometry draw commands into a command buffer.
+ * ------------------------------------------------------------------------ */
+
+static void record_geometry_draws_3d(VulkanContext *vk, VkCommandBuffer cmd, VkPipeline pipeline_3d) {
+    if (vk->draw_command_3d_count == 0) return;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_3d);
+
+    /* Bind 3D vertex buffer (binding 0) and 3D instance buffer (binding 1) */
+    VkBuffer buffers[] = { vk->vertex_buffer_3d, vk->instance_buffer_3d };
+    VkDeviceSize offsets[] = { 0, 0 };
+    vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+
+    /* Bind index buffer */
+    if (vk->index_buffer) {
+        vkCmdBindIndexBuffer(cmd, vk->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+    }
+
+    for (u32 i = 0; i < vk->draw_command_3d_count; i++) {
+        DrawCommand *dc = &vk->draw_commands_3d[i];
+        MeshSlot *mesh  = &vk->meshes[dc->mesh];
+
+        /* Push VP matrix + use_texture flag (68 bytes total) */
+        struct { float vp[16]; u32 use_texture; } push_data;
+        memcpy(push_data.vp, vk->vp_matrix, 64);
+        push_data.use_texture = (dc->texture != TEXTURE_HANDLE_INVALID) ? 1 : 0;
+        vkCmdPushConstants(cmd, vk->pipeline_layout_3d,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, 68, &push_data);
+
+        /* Bind texture descriptor (set 0) */
+        VkDescriptorSet tex_set = vk->dummy_desc_set;
+        if (dc->texture != TEXTURE_HANDLE_INVALID && dc->texture < vk->texture_count) {
+            tex_set = vk->texture_desc_sets[dc->texture];
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 vk->pipeline_layout_3d, 0, 1,
+                                 &tex_set, 0, NULL);
+
+        /* Bind light UBO descriptor (set 1) */
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 vk->pipeline_layout_3d, 1, 1,
+                                 &vk->light_desc_set, 0, NULL);
+
+        if (mesh->index_count > 0) {
+            vkCmdDrawIndexed(cmd,
+                             mesh->index_count,
+                             dc->instance_count,
+                             mesh->first_index,
+                             (i32)mesh->first_vertex,
+                             dc->instance_offset);
+        } else {
+            vkCmdDraw(cmd,
+                      mesh->vertex_count,
+                      dc->instance_count,
+                      mesh->first_vertex,
+                      dc->instance_offset);
+        }
+    }
+}
+
+/* --------------------------------------------------------------------------
  * Command buffer recording
  * ------------------------------------------------------------------------ */
 
@@ -162,8 +224,11 @@ static EngineResult record_command_buffer(Renderer *renderer, VkCommandBuffer cm
         VkRect2D scissor = { .offset = {0, 0}, .extent = vk->swapchain_extent };
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        /* Draw geometry using bloom scene pipeline */
+        /* Draw 2D geometry using bloom scene pipeline */
         record_geometry_draws(vk, cmd, vk->bloom.scene_graphics_pipeline);
+
+        /* Draw 3D geometry using bloom scene 3D pipeline */
+        record_geometry_draws_3d(vk, cmd, vk->bloom.scene_3d_pipeline);
 
         /* Draw text using bloom scene text pipeline */
         text_flush_with_pipeline(vk, cmd, vk->bloom.scene_text_pipeline);
@@ -206,8 +271,11 @@ static EngineResult record_command_buffer(Renderer *renderer, VkCommandBuffer cm
         VkRect2D scissor = { .offset = {0, 0}, .extent = vk->swapchain_extent };
         vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-        /* Draw geometry using standard pipeline */
+        /* Draw 2D geometry using standard pipeline */
         record_geometry_draws(vk, cmd, vk->graphics_pipeline);
+
+        /* Draw 3D geometry using 3D pipeline */
+        record_geometry_draws_3d(vk, cmd, vk->graphics_pipeline_3d);
 
         /* Draw text overlay */
         text_flush(vk, cmd);
@@ -257,6 +325,33 @@ static void compute_vp_matrix(VulkanContext *vk, const Camera2D *camera) {
 
     /* Store as flat float[16] for push constants */
     memcpy(vk->vp_matrix, vp, sizeof(float) * 16);
+}
+
+static void compute_vp_matrix_3d(VulkanContext *vk, const Camera3D *camera) {
+    f32 aspect = (f32)vk->swapchain_extent.width / (f32)vk->swapchain_extent.height;
+    f32 fov_rad = camera->fov * ((f32)GLM_PI / 180.0f);
+
+    mat4 proj;
+    glm_perspective(fov_rad, aspect, camera->near_plane, camera->far_plane, proj);
+
+    /* Vulkan Y-flip: cglm follows OpenGL convention (Y up), Vulkan has Y down */
+    proj[1][1] *= -1.0f;
+
+    mat4 view;
+    vec3 eye    = { camera->position[0], camera->position[1], camera->position[2] };
+    vec3 center = { camera->target[0],   camera->target[1],   camera->target[2] };
+    vec3 up     = { camera->up[0],       camera->up[1],       camera->up[2] };
+    glm_lookat(eye, center, up, view);
+
+    mat4 vp;
+    glm_mat4_mul(proj, view, vp);
+
+    memcpy(vk->vp_matrix, vp, sizeof(float) * 16);
+
+    /* Cache camera position for specular lighting */
+    vk->view_position[0] = camera->position[0];
+    vk->view_position[1] = camera->position[1];
+    vk->view_position[2] = camera->position[2];
 }
 
 /* --------------------------------------------------------------------------
@@ -369,6 +464,112 @@ EngineResult renderer_create(Window *window, const RendererConfig *config,
         vkUpdateDescriptorSets(r->vk.device, 1, &write, 0, NULL);
     }
 
+    /* ---- 3D pipeline and buffers ---- */
+    if ((res = vk_create_3d_pipeline(&r->vk)) != ENGINE_SUCCESS) goto fail;
+    if ((res = vk_create_vertex_buffer_3d(&r->vk, MAX_VERTICES_3D)) != ENGINE_SUCCESS) goto fail;
+    if ((res = vk_create_index_buffer(&r->vk, MAX_INDICES)) != ENGINE_SUCCESS) goto fail;
+
+    /* 3D instance buffer (CPU-visible, persistently mapped) */
+    {
+        VkDeviceSize buf_size = sizeof(InstanceData3D) * MAX_INSTANCES;
+        r->vk.instance_3d_capacity = MAX_INSTANCES;
+        r->vk.instance_3d_count = 0;
+
+        res = vk_create_buffer(&r->vk, buf_size,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &r->vk.instance_buffer_3d, &r->vk.instance_buffer_3d_memory);
+        if (res != ENGINE_SUCCESS) goto fail;
+
+        if (vkMapMemory(r->vk.device, r->vk.instance_buffer_3d_memory,
+                        0, buf_size, 0, &r->vk.instance_3d_mapped) != VK_SUCCESS) {
+            LOG_FATAL("Failed to map 3D instance buffer");
+            res = ENGINE_ERROR_VULKAN_INIT;
+            goto fail;
+        }
+    }
+
+    /* Light UBO (std140 layout, 80 bytes, persistently mapped) */
+    {
+        VkDeviceSize ubo_size = 80;
+        res = vk_create_buffer(&r->vk, ubo_size,
+            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &r->vk.light_ubo, &r->vk.light_ubo_memory);
+        if (res != ENGINE_SUCCESS) goto fail;
+
+        if (vkMapMemory(r->vk.device, r->vk.light_ubo_memory,
+                        0, ubo_size, 0, &r->vk.light_ubo_mapped) != VK_SUCCESS) {
+            LOG_FATAL("Failed to map light UBO");
+            res = ENGINE_ERROR_VULKAN_INIT;
+            goto fail;
+        }
+
+        /* Write default light */
+        struct {
+            f32 direction[4]; /* xyz + pad */
+            f32 color[4];
+            f32 ambient[4];
+            f32 view_pos[4];
+            f32 shininess[4];
+        } default_light = {
+            .direction = { 0.0f, -1.0f, 0.0f, 0.0f },
+            .color     = { 1.0f,  1.0f, 1.0f, 0.0f },
+            .ambient   = { 0.1f,  0.1f, 0.1f, 0.0f },
+            .view_pos  = { 0.0f,  0.0f, 0.0f, 0.0f },
+            .shininess = { 32.0f, 0.0f, 0.0f, 0.0f },
+        };
+        memcpy(r->vk.light_ubo_mapped, &default_light, sizeof(default_light));
+
+        /* Light descriptor pool (1 UBO) */
+        VkDescriptorPoolSize pool_size = {
+            .type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+        };
+        VkDescriptorPoolCreateInfo pool_info = {
+            .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets       = 1,
+            .poolSizeCount = 1,
+            .pPoolSizes    = &pool_size,
+        };
+        if (vkCreateDescriptorPool(r->vk.device, &pool_info, NULL,
+                                    &r->vk.light_desc_pool) != VK_SUCCESS) {
+            LOG_FATAL("Failed to create light descriptor pool");
+            res = ENGINE_ERROR_VULKAN_INIT;
+            goto fail;
+        }
+
+        /* Allocate light descriptor set */
+        VkDescriptorSetAllocateInfo alloc_info = {
+            .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool     = r->vk.light_desc_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts        = &r->vk.light_desc_set_layout,
+        };
+        if (vkAllocateDescriptorSets(r->vk.device, &alloc_info,
+                                      &r->vk.light_desc_set) != VK_SUCCESS) {
+            LOG_FATAL("Failed to allocate light descriptor set");
+            res = ENGINE_ERROR_VULKAN_INIT;
+            goto fail;
+        }
+
+        /* Write UBO to descriptor set */
+        VkDescriptorBufferInfo buf_info = {
+            .buffer = r->vk.light_ubo,
+            .offset = 0,
+            .range  = ubo_size,
+        };
+        VkWriteDescriptorSet write = {
+            .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet          = r->vk.light_desc_set,
+            .dstBinding      = 0,
+            .descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 1,
+            .pBufferInfo     = &buf_info,
+        };
+        vkUpdateDescriptorSets(r->vk.device, 1, &write, 0, NULL);
+    }
+
     /* Bloom post-processing (creates all bloom resources — disabled by default) */
     if ((res = bloom_init(&r->vk)) != ENGINE_SUCCESS) goto fail;
 
@@ -393,7 +594,7 @@ void renderer_destroy(Renderer *renderer) {
         /* Bloom cleanup */
         bloom_shutdown(vk);
 
-        /* Instance buffer cleanup */
+        /* 2D Instance buffer cleanup */
         if (vk->instance_mapped) {
             vkUnmapMemory(vk->device, vk->instance_buffer_memory);
             vk->instance_mapped = NULL;
@@ -402,6 +603,40 @@ void renderer_destroy(Renderer *renderer) {
             vkDestroyBuffer(vk->device, vk->instance_buffer, NULL);
             vkFreeMemory(vk->device, vk->instance_buffer_memory, NULL);
         }
+
+        /* 3D cleanup */
+        if (vk->instance_3d_mapped) {
+            vkUnmapMemory(vk->device, vk->instance_buffer_3d_memory);
+            vk->instance_3d_mapped = NULL;
+        }
+        if (vk->instance_buffer_3d) {
+            vkDestroyBuffer(vk->device, vk->instance_buffer_3d, NULL);
+            vkFreeMemory(vk->device, vk->instance_buffer_3d_memory, NULL);
+        }
+        if (vk->vertex_buffer_3d) {
+            vkDestroyBuffer(vk->device, vk->vertex_buffer_3d, NULL);
+            vkFreeMemory(vk->device, vk->vertex_buffer_3d_memory, NULL);
+        }
+        if (vk->index_buffer) {
+            vkDestroyBuffer(vk->device, vk->index_buffer, NULL);
+            vkFreeMemory(vk->device, vk->index_buffer_memory, NULL);
+        }
+        if (vk->light_ubo_mapped) {
+            vkUnmapMemory(vk->device, vk->light_ubo_memory);
+            vk->light_ubo_mapped = NULL;
+        }
+        if (vk->light_ubo) {
+            vkDestroyBuffer(vk->device, vk->light_ubo, NULL);
+            vkFreeMemory(vk->device, vk->light_ubo_memory, NULL);
+        }
+        if (vk->light_desc_pool)
+            vkDestroyDescriptorPool(vk->device, vk->light_desc_pool, NULL);
+        if (vk->light_desc_set_layout)
+            vkDestroyDescriptorSetLayout(vk->device, vk->light_desc_set_layout, NULL);
+        if (vk->graphics_pipeline_3d)
+            vkDestroyPipeline(vk->device, vk->graphics_pipeline_3d, NULL);
+        if (vk->pipeline_layout_3d)
+            vkDestroyPipelineLayout(vk->device, vk->pipeline_layout_3d, NULL);
 
         /* Texture cleanup */
         for (u32 i = 0; i < vk->texture_count; i++) {
@@ -421,8 +656,10 @@ EngineResult renderer_begin_frame(Renderer *renderer) {
     u32 frame = vk->current_frame;
 
     /* Reset per-frame state */
-    vk->instance_count     = 0;
-    vk->draw_command_count = 0;
+    vk->instance_count        = 0;
+    vk->draw_command_count    = 0;
+    vk->instance_3d_count     = 0;
+    vk->draw_command_3d_count = 0;
 
     /* Default camera: centered at origin, no rotation, zoom 1 */
     Camera2D default_cam = { .position = {0.0f, 0.0f}, .rotation = 0.0f, .zoom = 1.0f };
@@ -704,4 +941,123 @@ void renderer_set_bloom(Renderer *renderer, bool enabled, f32 intensity, f32 thr
 
 void renderer_set_bloom_settings(Renderer *renderer, const BloomSettings *settings) {
     renderer->bloom_settings = *settings;
+}
+
+/* ---- 3D Rendering API ---- */
+
+void renderer_set_camera_3d(Renderer *renderer, const Camera3D *camera) {
+    compute_vp_matrix_3d(&renderer->vk, camera);
+}
+
+void renderer_set_light(Renderer *renderer, const DirectionalLight *light) {
+    VulkanContext *vk = &renderer->vk;
+
+    /* std140 layout: each vec3 padded to vec4 (16 bytes) */
+    struct {
+        f32 direction[4];
+        f32 color[4];
+        f32 ambient[4];
+        f32 view_pos[4];
+        f32 shininess[4];
+    } ubo_data = {0};
+
+    memcpy(ubo_data.direction, light->direction, sizeof(f32) * 3);
+    memcpy(ubo_data.color, light->color, sizeof(f32) * 3);
+    memcpy(ubo_data.ambient, light->ambient, sizeof(f32) * 3);
+    memcpy(ubo_data.view_pos, vk->view_position, sizeof(f32) * 3);
+    ubo_data.shininess[0] = light->shininess;
+
+    memcpy(vk->light_ubo_mapped, &ubo_data, sizeof(ubo_data));
+}
+
+EngineResult renderer_upload_mesh_3d(Renderer *renderer,
+                                     const Vertex3D *vertices, u32 vertex_count,
+                                     const u32 *indices, u32 index_count,
+                                     MeshHandle *out_handle) {
+    return vk_upload_mesh_3d(&renderer->vk, vertices, vertex_count,
+                              indices, index_count, out_handle);
+}
+
+void renderer_draw_mesh_3d(Renderer *renderer, MeshHandle mesh,
+                           const InstanceData3D *instances, u32 instance_count) {
+    VulkanContext *vk = &renderer->vk;
+
+    if (instance_count == 0) return;
+    if (mesh >= vk->mesh_count) {
+        LOG_WARN("Invalid mesh handle %u (have %u meshes)", mesh, vk->mesh_count);
+        return;
+    }
+    if (!vk->meshes[mesh].is_3d) {
+        LOG_WARN("Mesh %u is not a 3D mesh — use renderer_draw_mesh instead", mesh);
+        return;
+    }
+    if (vk->draw_command_3d_count >= MAX_DRAW_COMMANDS) {
+        LOG_WARN("3D draw command list full (%u)", MAX_DRAW_COMMANDS);
+        return;
+    }
+
+    u32 remaining = vk->instance_3d_capacity - vk->instance_3d_count;
+    if (instance_count > remaining) {
+        LOG_WARN("3D instance buffer full (%u/%u), clamping",
+                 vk->instance_3d_count + instance_count, vk->instance_3d_capacity);
+        instance_count = remaining;
+        if (instance_count == 0) return;
+    }
+
+    u32 inst_offset = vk->instance_3d_count;
+
+    InstanceData3D *dst = (InstanceData3D *)vk->instance_3d_mapped + vk->instance_3d_count;
+    memcpy(dst, instances, sizeof(InstanceData3D) * instance_count);
+    vk->instance_3d_count += instance_count;
+
+    DrawCommand *dc = &vk->draw_commands_3d[vk->draw_command_3d_count++];
+    dc->mesh            = mesh;
+    dc->texture         = TEXTURE_HANDLE_INVALID;
+    dc->instance_offset = inst_offset;
+    dc->instance_count  = instance_count;
+}
+
+void renderer_draw_mesh_3d_textured(Renderer *renderer, MeshHandle mesh,
+                                    TextureHandle texture,
+                                    const InstanceData3D *instances,
+                                    u32 instance_count) {
+    VulkanContext *vk = &renderer->vk;
+
+    if (instance_count == 0) return;
+    if (mesh >= vk->mesh_count) {
+        LOG_WARN("Invalid mesh handle %u (have %u meshes)", mesh, vk->mesh_count);
+        return;
+    }
+    if (!vk->meshes[mesh].is_3d) {
+        LOG_WARN("Mesh %u is not a 3D mesh — use renderer_draw_mesh_textured instead", mesh);
+        return;
+    }
+    if (texture >= vk->texture_count) {
+        LOG_WARN("Invalid texture handle %u (have %u textures)", texture, vk->texture_count);
+        return;
+    }
+    if (vk->draw_command_3d_count >= MAX_DRAW_COMMANDS) {
+        LOG_WARN("3D draw command list full (%u)", MAX_DRAW_COMMANDS);
+        return;
+    }
+
+    u32 remaining = vk->instance_3d_capacity - vk->instance_3d_count;
+    if (instance_count > remaining) {
+        LOG_WARN("3D instance buffer full (%u/%u), clamping",
+                 vk->instance_3d_count + instance_count, vk->instance_3d_capacity);
+        instance_count = remaining;
+        if (instance_count == 0) return;
+    }
+
+    u32 inst_offset = vk->instance_3d_count;
+
+    InstanceData3D *dst = (InstanceData3D *)vk->instance_3d_mapped + vk->instance_3d_count;
+    memcpy(dst, instances, sizeof(InstanceData3D) * instance_count);
+    vk->instance_3d_count += instance_count;
+
+    DrawCommand *dc = &vk->draw_commands_3d[vk->draw_command_3d_count++];
+    dc->mesh            = mesh;
+    dc->texture         = texture;
+    dc->instance_offset = inst_offset;
+    dc->instance_count  = instance_count;
 }

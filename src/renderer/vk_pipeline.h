@@ -17,4 +17,10 @@ EngineResult vk_create_text_pipeline(VulkanContext *ctx);
 /* Create geometry + text pipelines against the bloom HDR render pass */
 EngineResult vk_create_bloom_scene_pipelines(VulkanContext *ctx);
 
+/* 3D pipeline (Phong-lit, uses mesh3d.vert/frag) */
+EngineResult vk_create_3d_pipeline(VulkanContext *ctx);
+
+/* 3D pipeline against bloom HDR render pass */
+EngineResult vk_create_bloom_scene_3d_pipeline(VulkanContext *ctx);
+
 #endif /* ENGINE_VK_PIPELINE_H */

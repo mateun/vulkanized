@@ -76,4 +76,39 @@ void         renderer_set_bloom(Renderer *renderer, bool enabled,
                                 f32 intensity, f32 threshold);
 void         renderer_set_bloom_settings(Renderer *renderer, const BloomSettings *settings);
 
+/* ---- 3D Rendering ---- */
+
+/* 3D Camera — computes perspective VP matrix (glm_perspective + glm_lookat).
+ * Call instead of renderer_set_camera for 3D scenes. */
+void         renderer_set_camera_3d(Renderer *renderer, const Camera3D *camera);
+
+/* Directional light for 3D Phong shading. Call once per frame before draw calls.
+ * Must be called AFTER renderer_set_camera_3d (needs camera position for specular). */
+void         renderer_set_light(Renderer *renderer, const DirectionalLight *light);
+
+/* 3D mesh upload — vertices with normals, optional index buffer.
+ * Pass indices=NULL, index_count=0 for non-indexed meshes. */
+EngineResult renderer_upload_mesh_3d(Renderer *renderer,
+                                     const Vertex3D *vertices, u32 vertex_count,
+                                     const u32 *indices, u32 index_count,
+                                     MeshHandle *out_handle);
+
+/* 3D instanced draw — uses the 3D pipeline with Phong lighting. */
+void         renderer_draw_mesh_3d(Renderer *renderer, MeshHandle mesh,
+                                   const InstanceData3D *instances, u32 instance_count);
+
+/* 3D textured instanced draw. */
+void         renderer_draw_mesh_3d_textured(Renderer *renderer, MeshHandle mesh,
+                                            TextureHandle texture,
+                                            const InstanceData3D *instances,
+                                            u32 instance_count);
+
+/* Procedural 3D primitives — generate indexed meshes at init time.
+ * All primitives are centered at origin, unit-sized (-0.5 to 0.5). */
+EngineResult renderer_create_cube(Renderer *renderer, MeshHandle *out_handle);
+EngineResult renderer_create_sphere(Renderer *renderer, u32 segments, u32 rings,
+                                    MeshHandle *out_handle);
+EngineResult renderer_create_cylinder(Renderer *renderer, u32 segments,
+                                      MeshHandle *out_handle);
+
 #endif /* ENGINE_RENDERER_H */

@@ -21,7 +21,8 @@
       "Bash(cl:*)",
       "Bash(python:*)",
       "Bash(screencapture:*)",
-      "Bash(osascript:*)"
+      "Bash(osascript:*)",
+      "Bash(source:*)"
     ]
   }
 }

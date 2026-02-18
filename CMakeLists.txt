@@ -48,6 +48,7 @@ set(ENGINE_SOURCES
     src/renderer/vk_buffer.c
     src/renderer/text.c
     src/renderer/bloom.c
+    src/renderer/primitives.c
     src/renderer/stb_impl.c
     src/gameplay/collision.c
     src/gameplay/particles.c
@@ -141,3 +142,4 @@ add_custom_target(shaders ALL DEPENDS ${SHADER_OUTPUTS})
 # --------------------------------------------------------------------------
 
 add_subdirectory(sample_games/shmup)
+add_subdirectory(sample_games/cube_demo)
