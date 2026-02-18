@@ -3,6 +3,7 @@
 A lightweight 2D/3D game engine written in C11 with a Vulkan renderer. Runs on Windows (native Vulkan) and macOS (MoltenVK). The engine builds as a static library — games link against it and own the main loop.
 
 ![Shmup sample game](assets/shmup_screenshot.png)
+![3D models demo](assets/3d_models.png)
 
 ## Features
 
