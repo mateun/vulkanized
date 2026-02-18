@@ -60,6 +60,10 @@ int main(void) {
     renderer_create_sphere(renderer, 32, 16, &mesh_sphere);
     renderer_create_cylinder(renderer, 24, &mesh_cylinder);
 
+    /* ---- Load glTF model ---- */
+    MeshHandle mesh_duck;
+    bool has_duck = (renderer_load_model(renderer, "assets/duck.glb", &mesh_duck) == ENGINE_SUCCESS);
+
     /* ---- Frame timing ---- */
     f64 last_time = glfwGetTime();
     f32 total_time = 0.0f;
@@ -78,9 +82,9 @@ int main(void) {
         if (input_key_pressed(GLFW_KEY_ESCAPE)) break;
 
         /* ---- Camera: orbit around origin ---- */
-        f32 cam_dist  = 6.0f;
+        f32 cam_dist  = 8.0f;
         f32 cam_angle = total_time * 0.3f;
-        f32 cam_height = 3.0f;
+        f32 cam_height = 4.0f;
 
         Camera3D camera = {
             .position   = { sinf(cam_angle) * cam_dist, cam_height, cosf(cam_angle) * cam_dist },
@@ -99,26 +103,33 @@ int main(void) {
             .shininess = 32.0f,
         };
 
-        /* ---- Instance data for the three primitives ---- */
+        /* ---- Instance data for the primitives ---- */
         InstanceData3D cube_inst = {
-            .position = { -2.0f, 0.0f, 0.0f },
+            .position = { -3.0f, 0.0f, 0.0f },
             .rotation = { total_time * 0.5f, total_time * 0.7f, 0.0f },
             .scale    = { 1.0f, 1.0f, 1.0f },
             .color    = { 0.8f, 0.3f, 0.2f }, /* red */
         };
 
         InstanceData3D sphere_inst = {
-            .position = { 0.0f, 0.0f, 0.0f },
+            .position = { -1.0f, 0.0f, 0.0f },
             .rotation = { 0.0f, total_time * 0.4f, 0.0f },
             .scale    = { 1.5f, 1.5f, 1.5f },
             .color    = { 0.2f, 0.6f, 0.9f }, /* blue */
         };
 
         InstanceData3D cylinder_inst = {
-            .position = { 2.0f, 0.0f, 0.0f },
+            .position = { 1.5f, 0.0f, 0.0f },
             .rotation = { total_time * 0.3f, total_time * 0.5f, total_time * 0.6f },
             .scale    = { 1.0f, 1.5f, 1.0f },
             .color    = { 0.3f, 0.8f, 0.3f }, /* green */
+        };
+
+        InstanceData3D duck_inst = {
+            .position = { 4.0f, 0.0f, 0.0f },
+            .rotation = { 0.0f, total_time * 0.5f, 0.0f },
+            .scale    = { 0.01f, 0.01f, 0.01f }, /* Duck model is large, scale down */
+            .color    = { 0.9f, 0.8f, 0.2f }, /* yellow */
         };
 
         /* ---- Render ---- */
@@ -130,6 +141,9 @@ int main(void) {
         renderer_draw_mesh_3d(renderer, mesh_cube, &cube_inst, 1);
         renderer_draw_mesh_3d(renderer, mesh_sphere, &sphere_inst, 1);
         renderer_draw_mesh_3d(renderer, mesh_cylinder, &cylinder_inst, 1);
+        if (has_duck) {
+            renderer_draw_mesh_3d(renderer, mesh_duck, &duck_inst, 1);
+        }
 
         /* Text overlay */
         char fps_str[64];

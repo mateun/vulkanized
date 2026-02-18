@@ -49,6 +49,7 @@ set(ENGINE_SOURCES
     src/renderer/text.c
     src/renderer/bloom.c
     src/renderer/primitives.c
+    src/renderer/model.c
     src/renderer/stb_impl.c
     src/gameplay/collision.c
     src/gameplay/particles.c

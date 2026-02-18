@@ -22,7 +22,8 @@
       "Bash(python:*)",
       "Bash(screencapture:*)",
       "Bash(osascript:*)",
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "mcp__fetch__fetch"
     ]
   }
 }
