@@ -2,6 +2,8 @@
 
 A lightweight 2D game engine written in C11 with a Vulkan renderer. Runs on Windows (native Vulkan) and macOS (MoltenVK). The engine builds as a static library — games link against it and own the main loop.
 
+![Shmup sample game](assets/shmup_screenshot.png)
+
 ## Features
 
 - **Vulkan renderer** — instanced mesh drawing, 2D orthographic camera, depth buffering, texture loading (PNG/JPG/BMP via stb_image), per-texture filter modes (smooth/pixelart), sprite sheet support, text rendering (stb_truetype)

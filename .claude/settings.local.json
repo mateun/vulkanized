@@ -19,7 +19,9 @@
       "Bash(timeout 3 ./shmup.exe:*)",
       "Bash(timeout:*)",
       "Bash(cl:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(screencapture:*)",
+      "Bash(osascript:*)"
     ]
   }
 }
