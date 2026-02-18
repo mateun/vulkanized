@@ -34,6 +34,7 @@ the main loop, calling engine functions directly.
 | cglm | Math (vec/mat operations) | Header-only, C-native |
 | stb_image | Texture loading | Header-only, single file |
 | miniaudio | Audio playback | Header-only, single file |
+| cgltf | glTF 2.0 model loading | Header-only, single file, C99 |
 | Lua | Runtime scripting | Embeddable, small footprint |
 
 ### Project Structure
@@ -51,13 +52,15 @@ ai_game_engine/
 │   │   └── input.h / input.c
 │   ├── renderer/          # Vulkan rendering
 │   │   ├── renderer.h / renderer.c      # Public API (begin/end frame, draw_text, upload_vertices)
-│   │   ├── renderer_types.h             # Public types (Vertex, InstanceData, Camera2D — no Vulkan dep)
+│   │   ├── renderer_types.h             # Public types (Vertex, InstanceData, Camera2D/3D — no Vulkan dep)
 │   │   ├── vk_init.h / vk_init.c        # Instance, device, swapchain
-│   │   ├── vk_pipeline.h / vk_pipeline.c # Pipeline, shaders
+│   │   ├── vk_pipeline.h / vk_pipeline.c # Pipeline, shaders (2D + 3D)
 │   │   ├── vk_buffer.h / vk_buffer.c    # Buffers, memory, texture upload
 │   │   ├── vk_types.h                   # Vulkan-specific type wrappers (internal)
 │   │   ├── bloom.h / bloom.c            # Bloom post-processing (80s neon glow)
-│   │   └── text.h / text.c              # Text rendering (stb_truetype, internal)
+│   │   ├── text.h / text.c              # Text rendering (stb_truetype, internal)
+│   │   ├── primitives.h / primitives.c  # Procedural 3D primitives (cube, sphere, cylinder)
+│   │   └── model.h / model.c            # glTF model loading (cgltf)
 │   ├── audio/             # Audio subsystem (miniaudio)
 │   │   └── audio.h / audio.c
 │   └── gameplay/          # Gameplay utilities (collision, particles)
@@ -67,29 +70,36 @@ ai_game_engine/
 │       ├── gameobject.h / gameobject.c # (planned) GameObject/Component
 │       └── scripting.h / scripting.c   # (planned) Lua scripting
 ├── sample_games/          # Sample games linking against engine
-│   └── shmup/             # Shoot-em-up sample
-│       ├── CMakeLists.txt # Builds shmup.exe, links engine, copies assets
-│       └── main.c         # Game entry point (owns main loop)
+│   ├── shmup/             # Shoot-em-up sample (2D)
+│   │   ├── CMakeLists.txt # Builds shmup.exe, links engine, copies assets
+│   │   └── main.c         # Game entry point (owns main loop)
+│   └── cube_demo/         # 3D rendering demo
+│       ├── CMakeLists.txt # Builds cube_demo, links engine, copies assets
+│       └── main.c         # Rotating primitives + glTF model with Phong lighting
 ├── shaders/               # GLSL shaders (compiled to SPIR-V)
-│   ├── triangle.vert / triangle.frag    # Geometry pipeline
+│   ├── triangle.vert / triangle.frag    # 2D geometry pipeline
+│   ├── mesh3d.vert / mesh3d.frag       # 3D geometry pipeline (Phong lighting)
 │   ├── text.vert / text.frag           # Text pipeline (alpha-blended)
 │   ├── fullscreen.vert                  # Fullscreen triangle (bloom passes)
 │   ├── bloom_extract.frag               # Brightness threshold extraction
 │   ├── bloom_blur.frag                  # 9-tap separable Gaussian blur
 │   └── bloom_composite.frag             # Composite + tonemap + scanlines + aberration
-├── assets/                # Textures, audio, fonts
+├── assets/                # Textures, audio, fonts, 3D models
 │   ├── consolas.ttf       # Font for text rendering
 │   ├── 8bit_shmup_spritesheet.png  # 6×6 tile sprite sheet (pixel art)
 │   ├── hero.png           # Player ship texture
 │   ├── blob.png           # Enemy blob texture
 │   ├── shoot.wav          # Retro laser chirp (100ms)
 │   ├── explosion.wav      # Noise-burst explosion (400ms)
-│   └── menu_song.wav      # Background music track
+│   ├── menu_song.wav      # Background music track
+│   ├── duck.glb           # Khronos Duck sample model (glTF binary)
+│   └── box.glb            # Khronos Box sample model (glTF binary)
 ├── tools/                 # Standalone utilities
 │   └── gen_sounds.c       # Procedural WAV generator
 └── third_party/           # Vendored header-only libs
     ├── stb/               # stb_truetype.h, stb_image.h
-    └── miniaudio/         # miniaudio.h (audio playback)
+    ├── miniaudio/         # miniaudio.h (audio playback)
+    └── cgltf/             # cgltf.h (glTF 2.0 parser)
 ```
 
 ### Engine Public API
@@ -128,6 +138,29 @@ renderer_set_bloom_settings(renderer, &bloom_settings);
 renderer_get_extent(renderer, &w, &h);
 renderer_handle_resize(renderer);
 renderer_set_clear_color(renderer, r, g, b, a);
+
+/* ---- 3D Rendering ---- */
+
+/* 3D Camera (perspective projection) */
+renderer_set_camera_3d(renderer, &camera);         /* Camera3D: position, target, up, fov, near, far */
+
+/* Directional light (Phong shading) — call after set_camera_3d */
+renderer_set_light(renderer, &light);               /* DirectionalLight: direction, color, ambient, shininess */
+
+/* 3D mesh upload — vertices with normals, optional index buffer */
+renderer_upload_mesh_3d(renderer, vertices, vert_count, indices, idx_count, &mesh_handle);
+
+/* 3D instanced draw — same pattern as 2D */
+renderer_draw_mesh_3d(renderer, mesh, instances, count);
+renderer_draw_mesh_3d_textured(renderer, mesh, texture, instances, count);
+
+/* Procedural 3D primitives — centered at origin, unit-sized */
+renderer_create_cube(renderer, &mesh_handle);
+renderer_create_sphere(renderer, segments, rings, &mesh_handle);
+renderer_create_cylinder(renderer, segments, &mesh_handle);
+
+/* glTF model loading — loads .gltf/.glb files, returns same MeshHandle as primitives */
+renderer_load_model(renderer, "path.glb", &mesh_handle);
 
 /* Audio (miniaudio backend, fire-and-forget with voice pooling) */
 audio_init(&audio_engine);
@@ -197,6 +230,19 @@ particles_to_instances(particles, count, out_instances, max_instances);
 - [ ] Background music (crossfade between tracks)
 - **Milestone: audio plays alongside rendering**
 
+### Phase 3.5: 3D Rendering
+- [x] 3D perspective camera (glm_perspective + glm_lookat, Vulkan Y-flip)
+- [x] 3D vertex/instance types (Vertex3D with normals, InstanceData3D with Euler rotation)
+- [x] Separate 3D graphics pipeline (mesh3d.vert/frag, coexists with 2D pipeline)
+- [x] Phong lighting (directional light via UBO — ambient + diffuse + specular)
+- [x] Indexed rendering (vkCmdDrawIndexed for 3D meshes)
+- [x] Procedural primitives (cube, sphere, cylinder — unit-sized, centered at origin)
+- [x] Bloom integration (3D objects render through HDR bloom pipeline)
+- [x] Two-sided lighting (auto-flip normals facing away from viewer)
+- [x] glTF model loading (cgltf, .gltf/.glb, merged into single MeshHandle)
+- [x] Sample: cube_demo (rotating primitives + loaded duck.glb model with Phong lighting)
+- **Milestone: lit 3D primitives and imported models on screen**
+
 ### Phase 4: Gameplay Framework
 - [ ] GameObject + Component data structures
 - [ ] World/Scene management
@@ -250,20 +296,29 @@ Requires the [LunarG Vulkan SDK for macOS](https://vulkan.lunarg.com/sdk/home) (
 - Apple frameworks linked automatically: CoreFoundation, CoreAudio, AudioToolbox, Cocoa, IOKit, QuartzCore
 
 ## Current Status
-**Phase 3 complete — Audio, collision, particles all working.**
+**Phase 3.5 complete — 3D rendering, Phong lighting, glTF model import all working.**
 - Phase 1 complete: triangle on screen, all Vulkan infrastructure working
 - Phase 2 complete: textured instanced rendering, camera, depth, resize, bloom
 - Phase 2.5 complete: collision detection, particle explosions, mouse input
 - Phase 3 complete: miniaudio integration with fire-and-forget voice pooling
+- Phase 3.5 complete: 3D rendering pipeline, Phong lighting, procedural primitives, glTF loading
 - Engine is a static library (`engine.lib` / `libengine.a`); games link against it
 - macOS supported via MoltenVK (Vulkan-over-Metal), tested on Apple M4
-- Sample game `shmup` is a playable shoot-em-up:
+- Sample game `shmup` is a playable 2D shoot-em-up:
   - WASD movement, left-click to shoot
   - Sprite sheet textures (6×6 pixel art atlas, nearest-neighbor filtering)
   - Bullet-enemy collision → HDR particle explosion (6× color boost) + explosion SFX
   - Enemy-player collision → flash damage feedback
   - Score tracking, selective bloom (HDR bullets/particles glow, normal enemies don't)
-- **Renderer**: instanced drawing, 2D camera, textures, sprite sheet UV tiling, per-texture filter modes, bloom (5-pass HDR pipeline), text overlay
+- Sample `cube_demo` is a 3D rendering showcase:
+  - Rotating cube, sphere, cylinder (procedural primitives)
+  - Imported glTF model (Khronos Duck)
+  - Orbiting perspective camera with Phong directional lighting
+  - Text overlay with FPS display
+- **2D Renderer**: instanced drawing, orthographic camera, textures, sprite sheet UV tiling, per-texture filter modes, bloom (5-pass HDR pipeline), text overlay
+- **3D Renderer**: perspective camera, Phong directional lighting (ambient + diffuse + specular via UBO), indexed instanced drawing, two-sided lighting, coexists with 2D pipeline
+- **3D Primitives**: procedural cube (24 verts/36 indices), UV sphere (configurable segments/rings), capped cylinder (configurable segments)
+- **Model Import**: glTF 2.0 via cgltf — loads .gltf/.glb files, extracts positions/normals/UVs/indices, merges all primitives into single MeshHandle
 - **Audio**: miniaudio backend, WAV/MP3/FLAC/OGG loading, voice pool (16 overlapping per sound), master volume
 - **Collision**: circle-circle (squared distance, no sqrt), single-vs-array, array-vs-array with CollisionPair output
 - **Particles**: circular burst emitter, velocity/spin/lifetime simulation, linear color fade + quadratic scale shrink, swap-remove dead, HDR color boost for bloom
