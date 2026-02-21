@@ -3,6 +3,7 @@
 
 #include "core/common.h"
 #include "renderer/renderer_types.h"
+#include "renderer/animation_types.h"
 #include "renderer/bloom.h"
 
 /* Forward decls — renderer hides Vulkan from the rest of the engine */
@@ -115,5 +116,29 @@ EngineResult renderer_create_cylinder(Renderer *renderer, u32 segments,
  * All meshes/primitives are merged into a single MeshHandle. */
 EngineResult renderer_load_model(Renderer *renderer, const char *path,
                                  MeshHandle *out_handle);
+
+/* ---- Skeletal Animation ---- */
+
+/* Load a skinned glTF model (skeleton + animation clips + geometry).
+ * The SkinnedModel is caller-owned and should be freed with skinned_model_destroy(). */
+EngineResult renderer_load_skinned_model_file(Renderer *renderer, const char *path,
+                                              SkinnedModel *out_model);
+
+/* Upload skinned mesh geometry to GPU. Returns a MeshHandle for skinned draws. */
+EngineResult renderer_upload_mesh_skinned(Renderer *renderer,
+                                          const SkinnedVertex3D *vertices, u32 vertex_count,
+                                          const u32 *indices, u32 index_count,
+                                          MeshHandle *out_handle);
+
+/* Draw a skinned model with joint matrices (untextured). */
+void         renderer_draw_skinned(Renderer *renderer, MeshHandle mesh,
+                                   const InstanceData3D *instance,
+                                   const f32 joint_matrices[][16], u32 joint_count);
+
+/* Draw a skinned model with joint matrices (textured). */
+void         renderer_draw_skinned_textured(Renderer *renderer, MeshHandle mesh,
+                                            TextureHandle texture,
+                                            const InstanceData3D *instance,
+                                            const f32 joint_matrices[][16], u32 joint_count);
 
 #endif /* ENGINE_RENDERER_H */

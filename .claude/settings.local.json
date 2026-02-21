@@ -23,7 +23,10 @@
       "Bash(screencapture:*)",
       "Bash(osascript:*)",
       "Bash(source:*)",
-      "mcp__fetch__fetch"
+      "mcp__fetch__fetch",
+      "WebFetch(domain:github.com)",
+      "Bash(start:*)",
+      "Bash(cmd /c \"cd /d F:\\\\dev\\\\c\\\\ai_game_engine\\\\build\\\\sample_games\\\\anim_demo\\\\Debug && start anim_demo.exe\")"
     ]
   }
 }

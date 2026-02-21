@@ -67,6 +67,17 @@ typedef struct {
     f32 color[3];    /* r, g, b — multiplied with vertex color */
 } InstanceData3D;    /* 48 bytes */
 
+/* ---- Skinned 3D Vertex format (for skeletal animation) ---- */
+
+typedef struct {
+    f32 position[3]; /* x, y, z */
+    f32 normal[3];   /* nx, ny, nz */
+    f32 uv[2];       /* u, v */
+    f32 color[3];    /* r, g, b */
+    u32 joints[4];   /* bone indices (up to 4 influences) */
+    f32 weights[4];  /* bone weights (sum to 1.0) */
+} SkinnedVertex3D;   /* 76 bytes */
+
 /* ---- 3D Camera ---- */
 
 typedef struct {

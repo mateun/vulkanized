@@ -10,6 +10,8 @@
 #define MAX_DRAW_COMMANDS    256
 #define MAX_VERTICES_3D      65536
 #define MAX_INDICES          131072
+#define MAX_SKINNED_VERTICES_3D  65536
+#define MAX_SKINNED_DRAW_COMMANDS 64
 
 /* ---- Texture handle ---- */
 
@@ -28,6 +30,7 @@ typedef struct {
     u32  first_vertex;  /* offset into the shared vertex buffer */
     u32  vertex_count;  /* number of vertices in this mesh */
     bool is_3d;         /* true = Vertex3D format, false = Vertex (2D) */
+    bool is_skinned;    /* true = SkinnedVertex3D format (skeletal animation) */
     u32  first_index;   /* offset into the shared index buffer (3D only) */
     u32  index_count;   /* 0 = non-indexed draw */
 } MeshSlot;
@@ -40,6 +43,17 @@ typedef struct {
     u32           instance_offset; /* offset into instance buffer */
     u32           instance_count;  /* number of instances */
 } DrawCommand;
+
+/* ---- Per-frame skinned draw command (skeletal animation) ---- */
+
+typedef struct {
+    MeshHandle    mesh;
+    TextureHandle texture;
+    u32           instance_offset;
+    u32           instance_count;
+    u32           joint_ssbo_offset; /* byte offset into the joint SSBO */
+    u32           joint_count;       /* number of joints for this draw */
+} SkinnedDrawCommand;
 
 /* ---- Bloom post-processing context ---- */
 
@@ -76,6 +90,7 @@ typedef struct {
     VkPipeline     scene_graphics_pipeline;
     VkPipeline     scene_text_pipeline;
     VkPipeline     scene_3d_pipeline;        /* 3D geometry for HDR scene pass */
+    VkPipeline     scene_skinned_pipeline;   /* Skinned 3D for HDR scene pass */
 
     /* Post-processing pipelines */
     VkPipelineLayout extract_layout;
@@ -225,6 +240,40 @@ typedef struct VulkanContext {
     /* 3D draw commands */
     DrawCommand              draw_commands_3d[MAX_DRAW_COMMANDS];
     u32                      draw_command_3d_count;
+
+    /* ---- Skinned 3D rendering (skeletal animation) ---- */
+
+    /* Skinned pipeline */
+    VkPipelineLayout         pipeline_layout_skinned;
+    VkPipeline               graphics_pipeline_skinned;
+
+    /* Skinned vertex buffer (GPU-local, separate from Vertex3D buffer) */
+    VkBuffer                 vertex_buffer_skinned;
+    VkDeviceMemory           vertex_buffer_skinned_memory;
+    u32                      vertex_skinned_total;
+
+    /* Skinned instance buffer (CPU-visible, reuses InstanceData3D layout) */
+    VkBuffer                 instance_buffer_skinned;
+    VkDeviceMemory           instance_buffer_skinned_memory;
+    void                    *instance_skinned_mapped;
+    u32                      instance_skinned_count;
+    u32                      instance_skinned_capacity;
+
+    /* Joint matrix SSBO (CPU-visible, persistently mapped) */
+    VkBuffer                 joint_ssbo;
+    VkDeviceMemory           joint_ssbo_memory;
+    void                    *joint_ssbo_mapped;
+    u32                      joint_ssbo_used_bytes;  /* bytes used this frame */
+    u32                      joint_ssbo_capacity;    /* total bytes */
+
+    /* Joint SSBO descriptor */
+    VkDescriptorSetLayout    joint_desc_set_layout;
+    VkDescriptorPool         joint_desc_pool;
+    VkDescriptorSet          joint_desc_set;
+
+    /* Skinned draw commands */
+    SkinnedDrawCommand       draw_commands_skinned[MAX_SKINNED_DRAW_COMMANDS];
+    u32                      draw_command_skinned_count;
 
     /* Cached camera position (for specular lighting) */
     float                    view_position[3];

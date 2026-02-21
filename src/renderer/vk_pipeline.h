@@ -23,4 +23,10 @@ EngineResult vk_create_3d_pipeline(VulkanContext *ctx);
 /* 3D pipeline against bloom HDR render pass */
 EngineResult vk_create_bloom_scene_3d_pipeline(VulkanContext *ctx);
 
+/* Skinned 3D pipeline (skeletal animation, SkinnedVertex3D + joint SSBO) */
+EngineResult vk_create_skinned_3d_pipeline(VulkanContext *ctx);
+
+/* Skinned 3D pipeline against bloom HDR render pass */
+EngineResult vk_create_bloom_scene_skinned_3d_pipeline(VulkanContext *ctx);
+
 #endif /* ENGINE_VK_PIPELINE_H */

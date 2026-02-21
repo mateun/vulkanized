@@ -44,6 +44,15 @@ EngineResult vk_upload_mesh_3d(VulkanContext *ctx,
                                const u32 *indices, u32 index_count,
                                MeshHandle *out_handle);
 
+/* Skinned vertex buffer (GPU-local, separate from regular 3D). */
+EngineResult vk_create_vertex_buffer_skinned(VulkanContext *ctx, u32 max_vertices);
+
+/* Upload a skinned 3D mesh (SkinnedVertex3D + indices). */
+EngineResult vk_upload_mesh_skinned(VulkanContext *ctx,
+                                     const SkinnedVertex3D *vertices, u32 vertex_count,
+                                     const u32 *indices, u32 index_count,
+                                     MeshHandle *out_handle);
+
 /* One-shot command helpers (exposed for text module). */
 VkCommandBuffer vk_begin_single_command(VulkanContext *ctx);
 void            vk_end_single_command(VulkanContext *ctx, VkCommandBuffer cmd);

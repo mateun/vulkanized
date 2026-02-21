@@ -316,6 +316,119 @@ EngineResult vk_upload_mesh_3d(VulkanContext *ctx,
 }
 
 /* --------------------------------------------------------------------------
+ * Skinned vertex buffer (pre-allocated GPU-local, separate from regular 3D)
+ * ------------------------------------------------------------------------ */
+
+EngineResult vk_create_vertex_buffer_skinned(VulkanContext *ctx, u32 max_vertices) {
+    VkDeviceSize buf_size = sizeof(SkinnedVertex3D) * max_vertices;
+
+    EngineResult res = vk_create_buffer(ctx, buf_size,
+        VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+        &ctx->vertex_buffer_skinned, &ctx->vertex_buffer_skinned_memory);
+    if (res != ENGINE_SUCCESS) return res;
+
+    ctx->vertex_skinned_total = 0;
+
+    LOG_INFO("Skinned vertex buffer created: capacity %u vertices (%llu bytes)",
+             max_vertices, (unsigned long long)buf_size);
+    return ENGINE_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
+ * Skinned mesh upload (SkinnedVertex3D + indices via staging)
+ * ------------------------------------------------------------------------ */
+
+EngineResult vk_upload_mesh_skinned(VulkanContext *ctx,
+                                     const SkinnedVertex3D *vertices, u32 vertex_count,
+                                     const u32 *indices, u32 index_count,
+                                     MeshHandle *out_handle)
+{
+    if (ctx->mesh_count >= MAX_MESHES) {
+        LOG_ERROR("Mesh table full (%u/%u)", ctx->mesh_count, MAX_MESHES);
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    /* Upload vertices */
+    VkDeviceSize vert_size   = sizeof(SkinnedVertex3D) * vertex_count;
+    VkDeviceSize vert_offset = sizeof(SkinnedVertex3D) * ctx->vertex_skinned_total;
+
+    VkBuffer staging_buf;
+    VkDeviceMemory staging_mem;
+    EngineResult res = vk_create_buffer(ctx, vert_size,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        &staging_buf, &staging_mem);
+    if (res != ENGINE_SUCCESS) return res;
+
+    void *mapped;
+    vkMapMemory(ctx->device, staging_mem, 0, vert_size, 0, &mapped);
+    memcpy(mapped, vertices, (size_t)vert_size);
+    vkUnmapMemory(ctx->device, staging_mem);
+
+    VkCommandBuffer cmd = vk_begin_single_command(ctx);
+    VkBufferCopy copy_region = {
+        .srcOffset = 0,
+        .dstOffset = vert_offset,
+        .size      = vert_size,
+    };
+    vkCmdCopyBuffer(cmd, staging_buf, ctx->vertex_buffer_skinned, 1, &copy_region);
+    vk_end_single_command(ctx, cmd);
+
+    vkDestroyBuffer(ctx->device, staging_buf, NULL);
+    vkFreeMemory(ctx->device, staging_mem, NULL);
+
+    /* Upload indices (shared index buffer with regular 3D meshes) */
+    u32 first_index = 0;
+    if (indices && index_count > 0) {
+        VkDeviceSize idx_size   = sizeof(u32) * index_count;
+        VkDeviceSize idx_offset = sizeof(u32) * ctx->index_total;
+
+        res = vk_create_buffer(ctx, idx_size,
+            VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &staging_buf, &staging_mem);
+        if (res != ENGINE_SUCCESS) return res;
+
+        vkMapMemory(ctx->device, staging_mem, 0, idx_size, 0, &mapped);
+        memcpy(mapped, indices, (size_t)idx_size);
+        vkUnmapMemory(ctx->device, staging_mem);
+
+        cmd = vk_begin_single_command(ctx);
+        VkBufferCopy idx_copy = {
+            .srcOffset = 0,
+            .dstOffset = idx_offset,
+            .size      = idx_size,
+        };
+        vkCmdCopyBuffer(cmd, staging_buf, ctx->index_buffer, 1, &idx_copy);
+        vk_end_single_command(ctx, cmd);
+
+        vkDestroyBuffer(ctx->device, staging_buf, NULL);
+        vkFreeMemory(ctx->device, staging_mem, NULL);
+
+        first_index = ctx->index_total;
+        ctx->index_total += index_count;
+    }
+
+    /* Register mesh slot */
+    MeshHandle handle = (MeshHandle)ctx->mesh_count;
+    ctx->meshes[handle].first_vertex = ctx->vertex_skinned_total;
+    ctx->meshes[handle].vertex_count = vertex_count;
+    ctx->meshes[handle].is_3d        = true;
+    ctx->meshes[handle].is_skinned   = true;
+    ctx->meshes[handle].first_index  = first_index;
+    ctx->meshes[handle].index_count  = index_count;
+    ctx->vertex_skinned_total += vertex_count;
+    ctx->mesh_count++;
+
+    *out_handle = handle;
+
+    LOG_INFO("Skinned mesh %u uploaded: %u vertices, %u indices",
+             handle, vertex_count, index_count);
+    return ENGINE_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
  * Texture creation (staging -> GPU-local VkImage)
  * ------------------------------------------------------------------------ */
 

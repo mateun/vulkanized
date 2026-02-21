@@ -5,6 +5,7 @@
 #include "renderer/vk_buffer.h"
 #include "renderer/bloom.h"
 #include "renderer/text.h"
+#include "renderer/skinned_model.h"
 #include "platform/window.h"
 #include "core/log.h"
 
@@ -174,6 +175,81 @@ static void record_geometry_draws_3d(VulkanContext *vk, VkCommandBuffer cmd, VkP
 }
 
 /* --------------------------------------------------------------------------
+ * Helper: record skinned 3D geometry draw commands into a command buffer.
+ * ------------------------------------------------------------------------ */
+
+static void record_geometry_draws_skinned(VulkanContext *vk, VkCommandBuffer cmd,
+                                           VkPipeline skinned_pipeline) {
+    if (vk->draw_command_skinned_count == 0) return;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skinned_pipeline);
+
+    /* Bind skinned vertex buffer (binding 0) and skinned instance buffer (binding 1) */
+    VkBuffer buffers[] = { vk->vertex_buffer_skinned, vk->instance_buffer_skinned };
+    VkDeviceSize offsets[] = { 0, 0 };
+    vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+
+    /* Bind index buffer (shared with regular 3D meshes) */
+    if (vk->index_buffer) {
+        vkCmdBindIndexBuffer(cmd, vk->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+    }
+
+    for (u32 i = 0; i < vk->draw_command_skinned_count; i++) {
+        SkinnedDrawCommand *dc = &vk->draw_commands_skinned[i];
+        MeshSlot *mesh = &vk->meshes[dc->mesh];
+
+        /* Push constants: VP (64B) + use_texture (4B) + joint_offset (4B) + joint_count (4B) = 76B */
+        struct {
+            float vp[16];
+            u32 use_texture;
+            u32 joint_offset;
+            u32 joint_count;
+        } push_data;
+        memcpy(push_data.vp, vk->vp_matrix, 64);
+        push_data.use_texture = (dc->texture != TEXTURE_HANDLE_INVALID) ? 1 : 0;
+        push_data.joint_offset = dc->joint_ssbo_offset;
+        push_data.joint_count = dc->joint_count;
+        vkCmdPushConstants(cmd, vk->pipeline_layout_skinned,
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                           0, 76, &push_data);
+
+        /* Bind texture descriptor (set 0) */
+        VkDescriptorSet tex_set = vk->dummy_desc_set;
+        if (dc->texture != TEXTURE_HANDLE_INVALID && dc->texture < vk->texture_count) {
+            tex_set = vk->texture_desc_sets[dc->texture];
+        }
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 vk->pipeline_layout_skinned, 0, 1,
+                                 &tex_set, 0, NULL);
+
+        /* Bind light UBO descriptor (set 1) */
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 vk->pipeline_layout_skinned, 1, 1,
+                                 &vk->light_desc_set, 0, NULL);
+
+        /* Bind joint SSBO descriptor (set 2) */
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 vk->pipeline_layout_skinned, 2, 1,
+                                 &vk->joint_desc_set, 0, NULL);
+
+        if (mesh->index_count > 0) {
+            vkCmdDrawIndexed(cmd,
+                             mesh->index_count,
+                             dc->instance_count,
+                             mesh->first_index,
+                             (i32)mesh->first_vertex,
+                             dc->instance_offset);
+        } else {
+            vkCmdDraw(cmd,
+                      mesh->vertex_count,
+                      dc->instance_count,
+                      mesh->first_vertex,
+                      dc->instance_offset);
+        }
+    }
+}
+
+/* --------------------------------------------------------------------------
  * Command buffer recording
  * ------------------------------------------------------------------------ */
 
@@ -230,6 +306,9 @@ static EngineResult record_command_buffer(Renderer *renderer, VkCommandBuffer cm
         /* Draw 3D geometry using bloom scene 3D pipeline */
         record_geometry_draws_3d(vk, cmd, vk->bloom.scene_3d_pipeline);
 
+        /* Draw skinned 3D geometry using bloom scene skinned pipeline */
+        record_geometry_draws_skinned(vk, cmd, vk->bloom.scene_skinned_pipeline);
+
         /* Draw text using bloom scene text pipeline */
         text_flush_with_pipeline(vk, cmd, vk->bloom.scene_text_pipeline);
 
@@ -276,6 +355,9 @@ static EngineResult record_command_buffer(Renderer *renderer, VkCommandBuffer cm
 
         /* Draw 3D geometry using 3D pipeline */
         record_geometry_draws_3d(vk, cmd, vk->graphics_pipeline_3d);
+
+        /* Draw skinned 3D geometry using skinned pipeline */
+        record_geometry_draws_skinned(vk, cmd, vk->graphics_pipeline_skinned);
 
         /* Draw text overlay */
         text_flush(vk, cmd);
@@ -570,6 +652,99 @@ EngineResult renderer_create(Window *window, const RendererConfig *config,
         vkUpdateDescriptorSets(r->vk.device, 1, &write, 0, NULL);
     }
 
+    /* ---- Skinned 3D pipeline and buffers ---- */
+    if ((res = vk_create_skinned_3d_pipeline(&r->vk)) != ENGINE_SUCCESS) goto fail;
+    if ((res = vk_create_vertex_buffer_skinned(&r->vk, MAX_SKINNED_VERTICES_3D)) != ENGINE_SUCCESS) goto fail;
+
+    /* Skinned instance buffer (CPU-visible, persistently mapped, reuses InstanceData3D) */
+    {
+        VkDeviceSize buf_size = sizeof(InstanceData3D) * MAX_SKINNED_DRAW_COMMANDS;
+        r->vk.instance_skinned_capacity = MAX_SKINNED_DRAW_COMMANDS;
+        r->vk.instance_skinned_count = 0;
+
+        res = vk_create_buffer(&r->vk, buf_size,
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &r->vk.instance_buffer_skinned, &r->vk.instance_buffer_skinned_memory);
+        if (res != ENGINE_SUCCESS) goto fail;
+
+        if (vkMapMemory(r->vk.device, r->vk.instance_buffer_skinned_memory,
+                        0, buf_size, 0, &r->vk.instance_skinned_mapped) != VK_SUCCESS) {
+            LOG_FATAL("Failed to map skinned instance buffer");
+            res = ENGINE_ERROR_VULKAN_INIT;
+            goto fail;
+        }
+    }
+
+    /* Joint matrix SSBO (CPU-visible, persistently mapped) */
+    {
+        /* 128 joints * 64 bytes * 64 draws = ~512 KB */
+        u32 ssbo_capacity = MAX_JOINTS * sizeof(f32) * 16 * MAX_SKINNED_DRAW_COMMANDS;
+        r->vk.joint_ssbo_capacity = ssbo_capacity;
+        r->vk.joint_ssbo_used_bytes = 0;
+
+        res = vk_create_buffer(&r->vk, ssbo_capacity,
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            &r->vk.joint_ssbo, &r->vk.joint_ssbo_memory);
+        if (res != ENGINE_SUCCESS) goto fail;
+
+        if (vkMapMemory(r->vk.device, r->vk.joint_ssbo_memory,
+                        0, ssbo_capacity, 0, &r->vk.joint_ssbo_mapped) != VK_SUCCESS) {
+            LOG_FATAL("Failed to map joint SSBO");
+            res = ENGINE_ERROR_VULKAN_INIT;
+            goto fail;
+        }
+
+        /* Joint SSBO descriptor pool (1 SSBO) */
+        VkDescriptorPoolSize pool_size = {
+            .type            = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+        };
+        VkDescriptorPoolCreateInfo pool_info = {
+            .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+            .maxSets       = 1,
+            .poolSizeCount = 1,
+            .pPoolSizes    = &pool_size,
+        };
+        if (vkCreateDescriptorPool(r->vk.device, &pool_info, NULL,
+                                    &r->vk.joint_desc_pool) != VK_SUCCESS) {
+            LOG_FATAL("Failed to create joint descriptor pool");
+            res = ENGINE_ERROR_VULKAN_INIT;
+            goto fail;
+        }
+
+        /* Allocate joint descriptor set */
+        VkDescriptorSetAllocateInfo alloc_info = {
+            .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool     = r->vk.joint_desc_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts        = &r->vk.joint_desc_set_layout,
+        };
+        if (vkAllocateDescriptorSets(r->vk.device, &alloc_info,
+                                      &r->vk.joint_desc_set) != VK_SUCCESS) {
+            LOG_FATAL("Failed to allocate joint descriptor set");
+            res = ENGINE_ERROR_VULKAN_INIT;
+            goto fail;
+        }
+
+        /* Write SSBO to descriptor set */
+        VkDescriptorBufferInfo buf_info = {
+            .buffer = r->vk.joint_ssbo,
+            .offset = 0,
+            .range  = ssbo_capacity,
+        };
+        VkWriteDescriptorSet write = {
+            .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet          = r->vk.joint_desc_set,
+            .dstBinding      = 0,
+            .descriptorType  = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .descriptorCount = 1,
+            .pBufferInfo     = &buf_info,
+        };
+        vkUpdateDescriptorSets(r->vk.device, 1, &write, 0, NULL);
+    }
+
     /* Bloom post-processing (creates all bloom resources — disabled by default) */
     if ((res = bloom_init(&r->vk)) != ENGINE_SUCCESS) goto fail;
 
@@ -638,6 +813,36 @@ void renderer_destroy(Renderer *renderer) {
         if (vk->pipeline_layout_3d)
             vkDestroyPipelineLayout(vk->device, vk->pipeline_layout_3d, NULL);
 
+        /* Skinned 3D cleanup */
+        if (vk->instance_skinned_mapped) {
+            vkUnmapMemory(vk->device, vk->instance_buffer_skinned_memory);
+            vk->instance_skinned_mapped = NULL;
+        }
+        if (vk->instance_buffer_skinned) {
+            vkDestroyBuffer(vk->device, vk->instance_buffer_skinned, NULL);
+            vkFreeMemory(vk->device, vk->instance_buffer_skinned_memory, NULL);
+        }
+        if (vk->joint_ssbo_mapped) {
+            vkUnmapMemory(vk->device, vk->joint_ssbo_memory);
+            vk->joint_ssbo_mapped = NULL;
+        }
+        if (vk->joint_ssbo) {
+            vkDestroyBuffer(vk->device, vk->joint_ssbo, NULL);
+            vkFreeMemory(vk->device, vk->joint_ssbo_memory, NULL);
+        }
+        if (vk->joint_desc_pool)
+            vkDestroyDescriptorPool(vk->device, vk->joint_desc_pool, NULL);
+        if (vk->vertex_buffer_skinned) {
+            vkDestroyBuffer(vk->device, vk->vertex_buffer_skinned, NULL);
+            vkFreeMemory(vk->device, vk->vertex_buffer_skinned_memory, NULL);
+        }
+        if (vk->graphics_pipeline_skinned)
+            vkDestroyPipeline(vk->device, vk->graphics_pipeline_skinned, NULL);
+        if (vk->pipeline_layout_skinned)
+            vkDestroyPipelineLayout(vk->device, vk->pipeline_layout_skinned, NULL);
+        if (vk->joint_desc_set_layout)
+            vkDestroyDescriptorSetLayout(vk->device, vk->joint_desc_set_layout, NULL);
+
         /* Texture cleanup */
         for (u32 i = 0; i < vk->texture_count; i++) {
             vk_destroy_texture(vk, &vk->textures[i]);
@@ -656,10 +861,13 @@ EngineResult renderer_begin_frame(Renderer *renderer) {
     u32 frame = vk->current_frame;
 
     /* Reset per-frame state */
-    vk->instance_count        = 0;
-    vk->draw_command_count    = 0;
-    vk->instance_3d_count     = 0;
-    vk->draw_command_3d_count = 0;
+    vk->instance_count              = 0;
+    vk->draw_command_count          = 0;
+    vk->instance_3d_count           = 0;
+    vk->draw_command_3d_count       = 0;
+    vk->instance_skinned_count      = 0;
+    vk->draw_command_skinned_count  = 0;
+    vk->joint_ssbo_used_bytes       = 0;
 
     /* Default camera: centered at origin, no rotation, zoom 1 */
     Camera2D default_cam = { .position = {0.0f, 0.0f}, .rotation = 0.0f, .zoom = 1.0f };
@@ -1060,4 +1268,93 @@ void renderer_draw_mesh_3d_textured(Renderer *renderer, MeshHandle mesh,
     dc->texture         = texture;
     dc->instance_offset = inst_offset;
     dc->instance_count  = instance_count;
+}
+
+/* ---- Skeletal Animation API ---- */
+
+EngineResult renderer_load_skinned_model_file(Renderer *renderer, const char *path,
+                                              SkinnedModel *out_model) {
+    return renderer_load_skinned_model(&renderer->vk, path, out_model);
+}
+
+EngineResult renderer_upload_mesh_skinned(Renderer *renderer,
+                                          const SkinnedVertex3D *vertices, u32 vertex_count,
+                                          const u32 *indices, u32 index_count,
+                                          MeshHandle *out_handle) {
+    return vk_upload_mesh_skinned(&renderer->vk, vertices, vertex_count,
+                                   indices, index_count, out_handle);
+}
+
+/* Internal helper for skinned draw (shared by textured + untextured) */
+static void draw_skinned_internal(Renderer *renderer, MeshHandle mesh,
+                                   TextureHandle texture,
+                                   const InstanceData3D *instance,
+                                   const f32 joint_matrices[][16], u32 joint_count) {
+    VulkanContext *vk = &renderer->vk;
+
+    if (mesh >= vk->mesh_count) {
+        LOG_WARN("Invalid mesh handle %u (have %u meshes)", mesh, vk->mesh_count);
+        return;
+    }
+    if (!vk->meshes[mesh].is_skinned) {
+        LOG_WARN("Mesh %u is not a skinned mesh", mesh);
+        return;
+    }
+    if (vk->draw_command_skinned_count >= MAX_SKINNED_DRAW_COMMANDS) {
+        LOG_WARN("Skinned draw command list full (%u)", MAX_SKINNED_DRAW_COMMANDS);
+        return;
+    }
+    if (joint_count == 0 || !joint_matrices) {
+        LOG_WARN("No joint matrices provided for skinned draw");
+        return;
+    }
+
+    /* Copy instance data (1 instance per skinned draw) */
+    if (vk->instance_skinned_count >= vk->instance_skinned_capacity) {
+        LOG_WARN("Skinned instance buffer full");
+        return;
+    }
+    u32 inst_offset = vk->instance_skinned_count;
+    InstanceData3D *dst = (InstanceData3D *)vk->instance_skinned_mapped + inst_offset;
+    memcpy(dst, instance, sizeof(InstanceData3D));
+    vk->instance_skinned_count++;
+
+    /* Copy joint matrices to SSBO (256-byte aligned for buffer dynamic offset compat) */
+    u32 joint_data_size = joint_count * sizeof(f32) * 16; /* joint_count * 64 bytes */
+    u32 aligned_offset = (vk->joint_ssbo_used_bytes + 255) & ~255u; /* 256-byte align */
+
+    if (aligned_offset + joint_data_size > vk->joint_ssbo_capacity) {
+        LOG_WARN("Joint SSBO full (%u + %u > %u)",
+                 aligned_offset, joint_data_size, vk->joint_ssbo_capacity);
+        vk->instance_skinned_count--; /* rollback */
+        return;
+    }
+
+    u8 *ssbo_dst = (u8 *)vk->joint_ssbo_mapped + aligned_offset;
+    memcpy(ssbo_dst, joint_matrices, joint_data_size);
+    vk->joint_ssbo_used_bytes = aligned_offset + joint_data_size;
+
+    /* Record draw command */
+    SkinnedDrawCommand *dc = &vk->draw_commands_skinned[vk->draw_command_skinned_count++];
+    dc->mesh              = mesh;
+    dc->texture           = texture;
+    dc->instance_offset   = inst_offset;
+    dc->instance_count    = 1;
+    dc->joint_ssbo_offset = aligned_offset;
+    dc->joint_count       = joint_count;
+}
+
+void renderer_draw_skinned(Renderer *renderer, MeshHandle mesh,
+                           const InstanceData3D *instance,
+                           const f32 joint_matrices[][16], u32 joint_count) {
+    draw_skinned_internal(renderer, mesh, TEXTURE_HANDLE_INVALID,
+                          instance, joint_matrices, joint_count);
+}
+
+void renderer_draw_skinned_textured(Renderer *renderer, MeshHandle mesh,
+                                    TextureHandle texture,
+                                    const InstanceData3D *instance,
+                                    const f32 joint_matrices[][16], u32 joint_count) {
+    draw_skinned_internal(renderer, mesh, texture,
+                          instance, joint_matrices, joint_count);
 }
