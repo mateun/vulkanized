@@ -19,4 +19,12 @@ EngineResult renderer_create_sphere(Renderer *renderer, u32 segments, u32 rings,
 EngineResult renderer_create_cylinder(Renderer *renderer, u32 segments,
                                       MeshHandle *out_handle);
 
+/* Ground plane: (subdivs_x+1)*(subdivs_z+1) vertex grid on XZ plane at Y=0.
+ * size_x/size_z control world-space dimensions, centered at origin.
+ * Designed for later height modulation (noise terrain). */
+EngineResult renderer_create_ground(Renderer *renderer,
+                                    u32 subdivs_x, u32 subdivs_z,
+                                    f32 size_x, f32 size_z,
+                                    MeshHandle *out_handle);
+
 #endif /* ENGINE_PRIMITIVES_H */

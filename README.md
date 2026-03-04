@@ -53,7 +53,7 @@ cmake --build build
 
 **shmup** — a playable 2D shoot-em-up with WASD movement, mouse-click shooting, pixel art sprite sheet textures, bullet-enemy collisions with HDR particle explosions and sound effects, score tracking, selective bloom, and 80s neon glow.
 
-**cube_demo** — a 3D rendering demo with rotating procedural primitives (cube, sphere, cylinder), an imported glTF model (duck), orbiting perspective camera, and Phong directional lighting.
+**cube_demo** — a 3D rendering demo with rotating procedural primitives (cube, sphere, cylinder), imported glTF models (duck, Suzanne), orbiting perspective camera, and Phong directional lighting.
 
 Press ESC to quit either demo.
 
@@ -78,6 +78,7 @@ ai_game_engine/
 │   ├── shmup/              # 2D shoot-em-up sample (playable!)
 │   └── cube_demo/          # 3D rendering demo (primitives + glTF model)
 ├── assets/                 # Fonts, textures, sprite sheets, sound effects, 3D models
+├── tools/                  # Standalone utilities (procedural WAV generator)
 └── third_party/            # stb, miniaudio, cgltf (header-only)
 ```
 

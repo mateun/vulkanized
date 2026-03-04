@@ -55,10 +55,11 @@ int main(void) {
     }
 
     /* ---- Create 3D primitives ---- */
-    MeshHandle mesh_cube, mesh_sphere, mesh_cylinder;
+    MeshHandle mesh_cube, mesh_sphere, mesh_cylinder, mesh_ground;
     renderer_create_cube(renderer, &mesh_cube);
     renderer_create_sphere(renderer, 32, 16, &mesh_sphere);
     renderer_create_cylinder(renderer, 24, &mesh_cylinder);
+    renderer_create_ground(renderer, 64, 64, 20.0f, 20.0f, &mesh_ground);
 
     /* ---- Load glTF model ---- */
     MeshHandle mesh_duck;
@@ -132,12 +133,20 @@ int main(void) {
             .color    = { 0.9f, 0.8f, 0.2f }, /* yellow */
         };
 
+        InstanceData3D ground_inst = {
+            .position = { 0.0f, 0.0f, 0.0f },
+            .rotation = { 0.0f, 0.0f, 0.0f },
+            .scale    = { 1.0f, 1.0f, 1.0f },
+            .color    = { 0.3f, 0.5f, 0.2f }, /* earthy green */
+        };
+
         /* ---- Render ---- */
         if (renderer_begin_frame(renderer) != ENGINE_SUCCESS) continue;
 
         renderer_set_camera_3d(renderer, &camera);
         renderer_set_light(renderer, &light);
 
+        renderer_draw_mesh_3d(renderer, mesh_ground, &ground_inst, 1);
         renderer_draw_mesh_3d(renderer, mesh_cube, &cube_inst, 1);
         renderer_draw_mesh_3d(renderer, mesh_sphere, &sphere_inst, 1);
         renderer_draw_mesh_3d(renderer, mesh_cylinder, &cylinder_inst, 1);

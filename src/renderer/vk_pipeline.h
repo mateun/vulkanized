@@ -23,4 +23,8 @@ EngineResult vk_create_3d_pipeline(VulkanContext *ctx);
 /* 3D pipeline against bloom HDR render pass */
 EngineResult vk_create_bloom_scene_3d_pipeline(VulkanContext *ctx);
 
+/* Shadow mapping (depth texture, render pass, pipeline, descriptors) */
+EngineResult vk_create_shadow_resources(VulkanContext *ctx);
+void         vk_destroy_shadow_resources(VulkanContext *ctx);
+
 #endif /* ENGINE_VK_PIPELINE_H */

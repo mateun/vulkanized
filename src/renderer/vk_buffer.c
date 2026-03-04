@@ -316,6 +316,43 @@ EngineResult vk_upload_mesh_3d(VulkanContext *ctx,
 }
 
 /* --------------------------------------------------------------------------
+ * Update vertex data for an existing 3D mesh
+ * ------------------------------------------------------------------------ */
+
+EngineResult vk_update_mesh_3d_vertices(VulkanContext *ctx, MeshHandle mesh,
+                                         const Vertex3D *vertices, u32 vertex_count) {
+    if (mesh >= ctx->mesh_count) return ENGINE_ERROR_VULKAN_INIT;
+    MeshSlot *slot = &ctx->meshes[mesh];
+    if (vertex_count != slot->vertex_count) return ENGINE_ERROR_VULKAN_INIT;
+
+    VkDeviceSize size   = sizeof(Vertex3D) * vertex_count;
+    VkDeviceSize offset = sizeof(Vertex3D) * slot->first_vertex;
+
+    VkBuffer staging_buf;
+    VkDeviceMemory staging_mem;
+    EngineResult res = vk_create_buffer(ctx, size,
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        &staging_buf, &staging_mem);
+    if (res != ENGINE_SUCCESS) return res;
+
+    void *mapped;
+    vkMapMemory(ctx->device, staging_mem, 0, size, 0, &mapped);
+    memcpy(mapped, vertices, (size_t)size);
+    vkUnmapMemory(ctx->device, staging_mem);
+
+    VkCommandBuffer cmd = vk_begin_single_command(ctx);
+    VkBufferCopy copy = { .srcOffset = 0, .dstOffset = offset, .size = size };
+    vkCmdCopyBuffer(cmd, staging_buf, ctx->vertex_buffer_3d, 1, &copy);
+    vk_end_single_command(ctx, cmd);
+
+    vkDestroyBuffer(ctx->device, staging_buf, NULL);
+    vkFreeMemory(ctx->device, staging_mem, NULL);
+
+    return ENGINE_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
  * Texture creation (staging -> GPU-local VkImage)
  * ------------------------------------------------------------------------ */
 

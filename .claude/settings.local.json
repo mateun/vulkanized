@@ -23,7 +23,8 @@
       "Bash(screencapture:*)",
       "Bash(osascript:*)",
       "Bash(source:*)",
-      "mcp__fetch__fetch"
+      "mcp__fetch__fetch",
+      "Bash(wc -l /Users/gru/dev/vulkanized/src/**/*.c /Users/gru/dev/vulkanized/src/**/*.h /Users/gru/dev/vulkanized/sample_games/*/main.c /Users/gru/dev/vulkanized/CMakeLists.txt /Users/gru/dev/vulkanized/sample_games/*/CMakeLists.txt)"
     ]
   }
 }

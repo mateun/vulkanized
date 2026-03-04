@@ -110,6 +110,10 @@ EngineResult renderer_create_sphere(Renderer *renderer, u32 segments, u32 rings,
                                     MeshHandle *out_handle);
 EngineResult renderer_create_cylinder(Renderer *renderer, u32 segments,
                                       MeshHandle *out_handle);
+EngineResult renderer_create_ground(Renderer *renderer,
+                                    u32 subdivs_x, u32 subdivs_z,
+                                    f32 size_x, f32 size_z,
+                                    MeshHandle *out_handle);
 
 /* glTF model loading — loads geometry from .gltf/.glb files.
  * All meshes/primitives are merged into a single MeshHandle. */

@@ -44,6 +44,10 @@ EngineResult vk_upload_mesh_3d(VulkanContext *ctx,
                                const u32 *indices, u32 index_count,
                                MeshHandle *out_handle);
 
+/* Update vertex data for an existing 3D mesh (same vertex count). */
+EngineResult vk_update_mesh_3d_vertices(VulkanContext *ctx, MeshHandle mesh,
+                                         const Vertex3D *vertices, u32 vertex_count);
+
 /* One-shot command helpers (exposed for text module). */
 VkCommandBuffer vk_begin_single_command(VulkanContext *ctx);
 void            vk_end_single_command(VulkanContext *ctx, VkCommandBuffer cmd);

@@ -40,6 +40,7 @@ FetchContent_MakeAvailable(cglm)
 set(ENGINE_SOURCES
     src/core/log.c
     src/core/arena.c
+    src/core/noise.c
     src/platform/window.c
     src/platform/input.c
     src/renderer/renderer.c

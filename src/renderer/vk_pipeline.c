@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* --------------------------------------------------------------------------
  * Shader module loading
@@ -1042,12 +1043,12 @@ static EngineResult create_3d_pipeline_internal(VulkanContext *ctx,
  * ------------------------------------------------------------------------ */
 
 EngineResult vk_create_3d_pipeline(VulkanContext *ctx) {
-    /* Light UBO descriptor set layout (set 1, binding 0) */
+    /* Light UBO descriptor set layout (set 1, binding 0) — accessed by both vert and frag */
     VkDescriptorSetLayoutBinding ubo_binding = {
         .binding         = 0,
         .descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
         .descriptorCount = 1,
-        .stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .stageFlags      = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
     };
 
     VkDescriptorSetLayoutCreateInfo ubo_layout_info = {
@@ -1062,11 +1063,13 @@ EngineResult vk_create_3d_pipeline(VulkanContext *ctx) {
         return ENGINE_ERROR_VULKAN_PIPELINE;
     }
 
-    /* Pipeline layout: set 0 = texture sampler (reuse geo_desc_set_layout),
-     *                  set 1 = light UBO */
+    /* Pipeline layout: set 0 = texture sampler,
+     *                  set 1 = light UBO,
+     *                  set 2 = shadow map */
     VkDescriptorSetLayout set_layouts[] = {
         ctx->geo_desc_set_layout,
         ctx->light_desc_set_layout,
+        ctx->shadow.desc_set_layout,
     };
 
     VkPushConstantRange push_range = {
@@ -1108,4 +1111,419 @@ EngineResult vk_create_bloom_scene_3d_pipeline(VulkanContext *ctx) {
 
     LOG_INFO("Bloom scene 3D pipeline created");
     return ENGINE_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
+ * Shadow mapping: depth texture, render pass, pipeline, descriptors
+ * -------------------------------------------------------------------------- */
+
+static u32 find_memory_type_shadow(VulkanContext *ctx, u32 type_filter, VkMemoryPropertyFlags props) {
+    VkPhysicalDeviceMemoryProperties mem_props;
+    vkGetPhysicalDeviceMemoryProperties(ctx->physical_device, &mem_props);
+    for (u32 i = 0; i < mem_props.memoryTypeCount; i++) {
+        if ((type_filter & (1 << i)) &&
+            (mem_props.memoryTypes[i].propertyFlags & props) == props) {
+            return i;
+        }
+    }
+    return UINT32_MAX;
+}
+
+EngineResult vk_create_shadow_resources(VulkanContext *ctx) {
+    ShadowContext *s = &ctx->shadow;
+
+    /* ---- Depth image ---- */
+    VkImageCreateInfo image_info = {
+        .sType       = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType   = VK_IMAGE_TYPE_2D,
+        .format      = VK_FORMAT_D32_SFLOAT,
+        .extent      = { SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, 1 },
+        .mipLevels   = 1,
+        .arrayLayers = 1,
+        .samples     = VK_SAMPLE_COUNT_1_BIT,
+        .tiling      = VK_IMAGE_TILING_OPTIMAL,
+        .usage       = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+
+    if (vkCreateImage(ctx->device, &image_info, NULL, &s->depth_image) != VK_SUCCESS) {
+        LOG_FATAL("Failed to create shadow depth image");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    VkMemoryRequirements mem_reqs;
+    vkGetImageMemoryRequirements(ctx->device, s->depth_image, &mem_reqs);
+
+    u32 mem_type = find_memory_type_shadow(ctx, mem_reqs.memoryTypeBits,
+                                            VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (mem_type == UINT32_MAX) {
+        LOG_FATAL("Failed to find suitable memory for shadow map");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    VkMemoryAllocateInfo alloc_info = {
+        .sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize  = mem_reqs.size,
+        .memoryTypeIndex = mem_type,
+    };
+
+    if (vkAllocateMemory(ctx->device, &alloc_info, NULL, &s->depth_memory) != VK_SUCCESS) {
+        LOG_FATAL("Failed to allocate shadow depth memory");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+    vkBindImageMemory(ctx->device, s->depth_image, s->depth_memory, 0);
+
+    /* ---- Depth image view ---- */
+    VkImageViewCreateInfo view_info = {
+        .sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image    = s->depth_image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format   = VK_FORMAT_D32_SFLOAT,
+        .subresourceRange = {
+            .aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+            .levelCount = 1,
+            .layerCount = 1,
+        },
+    };
+
+    if (vkCreateImageView(ctx->device, &view_info, NULL, &s->depth_view) != VK_SUCCESS) {
+        LOG_FATAL("Failed to create shadow depth image view");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    /* ---- Comparison sampler (for hardware PCF via sampler2DShadow) ---- */
+    VkSamplerCreateInfo sampler_info = {
+        .sType         = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter     = VK_FILTER_LINEAR,
+        .minFilter     = VK_FILTER_LINEAR,
+        .mipmapMode    = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+        .addressModeV  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+        .addressModeW  = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER,
+        .borderColor   = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,  /* out-of-bounds = lit */
+        .compareEnable = VK_TRUE,
+        .compareOp     = VK_COMPARE_OP_LESS,
+    };
+
+    if (vkCreateSampler(ctx->device, &sampler_info, NULL, &s->depth_sampler) != VK_SUCCESS) {
+        LOG_FATAL("Failed to create shadow sampler");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    /* ---- Depth-only render pass ---- */
+    VkAttachmentDescription depth_attachment = {
+        .format         = VK_FORMAT_D32_SFLOAT,
+        .samples        = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp         = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp        = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout    = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+
+    VkAttachmentReference depth_ref = {
+        .attachment = 0,
+        .layout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+
+    VkSubpassDescription subpass = {
+        .pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount    = 0,
+        .pDepthStencilAttachment = &depth_ref,
+    };
+
+    VkSubpassDependency deps[2] = {
+        {
+            .srcSubpass    = VK_SUBPASS_EXTERNAL,
+            .dstSubpass    = 0,
+            .srcStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            .dstStageMask  = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+            .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT,
+        },
+        {
+            .srcSubpass    = 0,
+            .dstSubpass    = VK_SUBPASS_EXTERNAL,
+            .srcStageMask  = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+            .dstStageMask  = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            .srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT,
+        },
+    };
+
+    VkRenderPassCreateInfo rp_info = {
+        .sType           = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments    = &depth_attachment,
+        .subpassCount    = 1,
+        .pSubpasses      = &subpass,
+        .dependencyCount = 2,
+        .pDependencies   = deps,
+    };
+
+    if (vkCreateRenderPass(ctx->device, &rp_info, NULL, &s->render_pass) != VK_SUCCESS) {
+        LOG_FATAL("Failed to create shadow render pass");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    /* ---- Framebuffer ---- */
+    VkFramebufferCreateInfo fb_info = {
+        .sType       = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .renderPass  = s->render_pass,
+        .attachmentCount = 1,
+        .pAttachments    = &s->depth_view,
+        .width       = SHADOW_MAP_SIZE,
+        .height      = SHADOW_MAP_SIZE,
+        .layers      = 1,
+    };
+
+    if (vkCreateFramebuffer(ctx->device, &fb_info, NULL, &s->framebuffer) != VK_SUCCESS) {
+        LOG_FATAL("Failed to create shadow framebuffer");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    /* ---- Shadow descriptor set layout (for sampling in mesh3d.frag, set 2) ---- */
+    VkDescriptorSetLayoutBinding shadow_binding = {
+        .binding         = 0,
+        .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT,
+    };
+
+    VkDescriptorSetLayoutCreateInfo shadow_layout_info = {
+        .sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings    = &shadow_binding,
+    };
+
+    if (vkCreateDescriptorSetLayout(ctx->device, &shadow_layout_info, NULL,
+                                     &s->desc_set_layout) != VK_SUCCESS) {
+        LOG_FATAL("Failed to create shadow descriptor set layout");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    /* ---- Descriptor pool + set ---- */
+    VkDescriptorPoolSize pool_size = {
+        .type            = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+    };
+    VkDescriptorPoolCreateInfo pool_info = {
+        .sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets       = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes    = &pool_size,
+    };
+    if (vkCreateDescriptorPool(ctx->device, &pool_info, NULL, &s->desc_pool) != VK_SUCCESS) {
+        LOG_FATAL("Failed to create shadow descriptor pool");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    VkDescriptorSetAllocateInfo set_alloc = {
+        .sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool     = s->desc_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts        = &s->desc_set_layout,
+    };
+    if (vkAllocateDescriptorSets(ctx->device, &set_alloc, &s->desc_set) != VK_SUCCESS) {
+        LOG_FATAL("Failed to allocate shadow descriptor set");
+        return ENGINE_ERROR_VULKAN_INIT;
+    }
+
+    /* Write shadow depth texture to descriptor set */
+    VkDescriptorImageInfo img_info = {
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        .imageView   = s->depth_view,
+        .sampler     = s->depth_sampler,
+    };
+    VkWriteDescriptorSet write = {
+        .sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet          = s->desc_set,
+        .dstBinding      = 0,
+        .descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .pImageInfo      = &img_info,
+    };
+    vkUpdateDescriptorSets(ctx->device, 1, &write, 0, NULL);
+
+    /* ---- Shadow pipeline (depth-only) ---- */
+    {
+        /* Pipeline layout: just push constant (light VP matrix, 64 bytes) */
+        VkPushConstantRange push_range = {
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .offset     = 0,
+            .size       = 64,  /* mat4 */
+        };
+
+        VkPipelineLayoutCreateInfo layout_info = {
+            .sType                  = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+            .setLayoutCount         = 0,
+            .pushConstantRangeCount = 1,
+            .pPushConstantRanges    = &push_range,
+        };
+
+        if (vkCreatePipelineLayout(ctx->device, &layout_info, NULL,
+                                    &s->pipeline_layout) != VK_SUCCESS) {
+            LOG_FATAL("Failed to create shadow pipeline layout");
+            return ENGINE_ERROR_VULKAN_PIPELINE;
+        }
+
+        /* Load shadow shaders */
+        size_t vert_size, frag_size;
+        u8 *vert_code = vk_read_file("shaders/shadow.vert.spv", &vert_size);
+        u8 *frag_code = vk_read_file("shaders/shadow.frag.spv", &frag_size);
+        if (!vert_code || !frag_code) {
+            free(vert_code);
+            free(frag_code);
+            LOG_FATAL("Failed to load shadow shader files");
+            return ENGINE_ERROR_FILE_NOT_FOUND;
+        }
+
+        VkShaderModule vert_module = vk_create_shader_module(ctx->device, vert_code, vert_size);
+        VkShaderModule frag_module = vk_create_shader_module(ctx->device, frag_code, frag_size);
+        free(vert_code);
+        free(frag_code);
+
+        if (vert_module == VK_NULL_HANDLE || frag_module == VK_NULL_HANDLE) {
+            return ENGINE_ERROR_VULKAN_PIPELINE;
+        }
+
+        VkPipelineShaderStageCreateInfo shader_stages[] = {
+            {
+                .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage  = VK_SHADER_STAGE_VERTEX_BIT,
+                .module = vert_module,
+                .pName  = "main",
+            },
+            {
+                .sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                .stage  = VK_SHADER_STAGE_FRAGMENT_BIT,
+                .module = frag_module,
+                .pName  = "main",
+            },
+        };
+
+        /* Same vertex input as 3D pipeline */
+        VkVertexInputBindingDescription bindings[] = {
+            { .binding = 0, .stride = sizeof(Vertex3D),      .inputRate = VK_VERTEX_INPUT_RATE_VERTEX },
+            { .binding = 1, .stride = sizeof(InstanceData3D), .inputRate = VK_VERTEX_INPUT_RATE_INSTANCE },
+        };
+
+        VkVertexInputAttributeDescription attributes[] = {
+            { .binding = 0, .location = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex3D, position) },
+            { .binding = 0, .location = 1, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex3D, normal) },
+            { .binding = 0, .location = 2, .format = VK_FORMAT_R32G32_SFLOAT,    .offset = offsetof(Vertex3D, uv) },
+            { .binding = 0, .location = 3, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(Vertex3D, color) },
+            { .binding = 1, .location = 4, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(InstanceData3D, position) },
+            { .binding = 1, .location = 5, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(InstanceData3D, rotation) },
+            { .binding = 1, .location = 6, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(InstanceData3D, scale) },
+            { .binding = 1, .location = 7, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = offsetof(InstanceData3D, color) },
+        };
+
+        VkPipelineVertexInputStateCreateInfo vertex_input = {
+            .sType                           = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+            .vertexBindingDescriptionCount   = ENGINE_ARRAY_LEN(bindings),
+            .pVertexBindingDescriptions      = bindings,
+            .vertexAttributeDescriptionCount = ENGINE_ARRAY_LEN(attributes),
+            .pVertexAttributeDescriptions    = attributes,
+        };
+
+        VkPipelineInputAssemblyStateCreateInfo input_assembly = {
+            .sType    = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+            .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        };
+
+        VkDynamicState dynamic_states[] = { VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR };
+        VkPipelineDynamicStateCreateInfo dynamic_state = {
+            .sType             = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+            .dynamicStateCount = ENGINE_ARRAY_LEN(dynamic_states),
+            .pDynamicStates    = dynamic_states,
+        };
+
+        VkPipelineViewportStateCreateInfo viewport_state = {
+            .sType         = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .scissorCount  = 1,
+        };
+
+        VkPipelineRasterizationStateCreateInfo rasterizer = {
+            .sType            = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+            .polygonMode      = VK_POLYGON_MODE_FILL,
+            .lineWidth        = 1.0f,
+            .cullMode         = VK_CULL_MODE_NONE,  /* no culling — matches main 3D pipeline */
+            .frontFace        = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+            .depthBiasEnable  = VK_TRUE,
+            .depthBiasConstantFactor = 1.25f,
+            .depthBiasSlopeFactor    = 1.75f,
+        };
+
+        VkPipelineMultisampleStateCreateInfo multisampling = {
+            .sType                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+            .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        };
+
+        VkPipelineDepthStencilStateCreateInfo depth_stencil = {
+            .sType            = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+            .depthTestEnable  = VK_TRUE,
+            .depthWriteEnable = VK_TRUE,
+            .depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL,
+        };
+
+        /* No color blend state (no color attachments) */
+        VkPipelineColorBlendStateCreateInfo color_blending = {
+            .sType           = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .attachmentCount = 0,
+        };
+
+        VkGraphicsPipelineCreateInfo pipeline_info = {
+            .sType               = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .stageCount          = ENGINE_ARRAY_LEN(shader_stages),
+            .pStages             = shader_stages,
+            .pVertexInputState   = &vertex_input,
+            .pInputAssemblyState = &input_assembly,
+            .pViewportState      = &viewport_state,
+            .pRasterizationState  = &rasterizer,
+            .pMultisampleState    = &multisampling,
+            .pDepthStencilState   = &depth_stencil,
+            .pColorBlendState     = &color_blending,
+            .pDynamicState        = &dynamic_state,
+            .layout               = s->pipeline_layout,
+            .renderPass           = s->render_pass,
+            .subpass              = 0,
+        };
+
+        VkResult result = vkCreateGraphicsPipelines(ctx->device, VK_NULL_HANDLE, 1,
+                                                     &pipeline_info, NULL, &s->pipeline);
+        vkDestroyShaderModule(ctx->device, vert_module, NULL);
+        vkDestroyShaderModule(ctx->device, frag_module, NULL);
+
+        if (result != VK_SUCCESS) {
+            LOG_FATAL("Failed to create shadow pipeline");
+            return ENGINE_ERROR_VULKAN_PIPELINE;
+        }
+    }
+
+    LOG_INFO("Shadow mapping resources created (%ux%u)", SHADOW_MAP_SIZE, SHADOW_MAP_SIZE);
+    return ENGINE_SUCCESS;
+}
+
+void vk_destroy_shadow_resources(VulkanContext *ctx) {
+    ShadowContext *s = &ctx->shadow;
+    VkDevice d = ctx->device;
+
+    if (s->pipeline)        vkDestroyPipeline(d, s->pipeline, NULL);
+    if (s->pipeline_layout) vkDestroyPipelineLayout(d, s->pipeline_layout, NULL);
+    if (s->desc_pool)       vkDestroyDescriptorPool(d, s->desc_pool, NULL);
+    if (s->desc_set_layout) vkDestroyDescriptorSetLayout(d, s->desc_set_layout, NULL);
+    if (s->framebuffer)     vkDestroyFramebuffer(d, s->framebuffer, NULL);
+    if (s->render_pass)     vkDestroyRenderPass(d, s->render_pass, NULL);
+    if (s->depth_sampler)   vkDestroySampler(d, s->depth_sampler, NULL);
+    if (s->depth_view)      vkDestroyImageView(d, s->depth_view, NULL);
+    if (s->depth_image)     vkDestroyImage(d, s->depth_image, NULL);
+    if (s->depth_memory)    vkFreeMemory(d, s->depth_memory, NULL);
+
+    memset(s, 0, sizeof(*s));
 }

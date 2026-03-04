@@ -10,7 +10,11 @@
 
 #include <cglm/mat4.h>
 #include <cglm/cam.h>
+#include <cglm/clipspace/ortho_rh_zo.h>
 #include <cglm/affine.h>
+#include <cglm/vec3.h>
+
+#include <math.h>
 
 #include "stb/stb_image.h"
 
@@ -156,6 +160,11 @@ static void record_geometry_draws_3d(VulkanContext *vk, VkCommandBuffer cmd, VkP
                                  vk->pipeline_layout_3d, 1, 1,
                                  &vk->light_desc_set, 0, NULL);
 
+        /* Bind shadow map descriptor (set 2) */
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 vk->pipeline_layout_3d, 2, 1,
+                                 &vk->shadow.desc_set, 0, NULL);
+
         if (mesh->index_count > 0) {
             vkCmdDrawIndexed(cmd,
                              mesh->index_count,
@@ -174,6 +183,78 @@ static void record_geometry_draws_3d(VulkanContext *vk, VkCommandBuffer cmd, VkP
 }
 
 /* --------------------------------------------------------------------------
+ * Shadow pass recording (depth-only from light's perspective)
+ * -------------------------------------------------------------------------- */
+
+static void record_shadow_pass(VulkanContext *vk, VkCommandBuffer cmd) {
+    if (vk->draw_command_3d_count == 0) return;
+
+    ShadowContext *s = &vk->shadow;
+
+    VkClearValue clear_depth = { .depthStencil = { 1.0f, 0 } };
+
+    VkRenderPassBeginInfo rp_info = {
+        .sType       = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass  = s->render_pass,
+        .framebuffer = s->framebuffer,
+        .renderArea  = { .offset = {0, 0}, .extent = { SHADOW_MAP_SIZE, SHADOW_MAP_SIZE } },
+        .clearValueCount = 1,
+        .pClearValues    = &clear_depth,
+    };
+
+    vkCmdBeginRenderPass(cmd, &rp_info, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport = {
+        0.0f, 0.0f,
+        (float)SHADOW_MAP_SIZE, (float)SHADOW_MAP_SIZE,
+        0.0f, 1.0f,
+    };
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor = { .offset = {0, 0}, .extent = { SHADOW_MAP_SIZE, SHADOW_MAP_SIZE } };
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, s->pipeline);
+
+    /* Push light VP matrix */
+    vkCmdPushConstants(cmd, s->pipeline_layout,
+                       VK_SHADER_STAGE_VERTEX_BIT,
+                       0, 64, s->light_vp);
+
+    /* Bind same vertex + instance buffers as the main 3D pass */
+    VkBuffer buffers[] = { vk->vertex_buffer_3d, vk->instance_buffer_3d };
+    VkDeviceSize offsets[] = { 0, 0 };
+    vkCmdBindVertexBuffers(cmd, 0, 2, buffers, offsets);
+
+    if (vk->index_buffer) {
+        vkCmdBindIndexBuffer(cmd, vk->index_buffer, 0, VK_INDEX_TYPE_UINT32);
+    }
+
+    /* Draw all 3D meshes (same draw commands as main pass) */
+    for (u32 i = 0; i < vk->draw_command_3d_count; i++) {
+        DrawCommand *dc = &vk->draw_commands_3d[i];
+        MeshSlot *mesh  = &vk->meshes[dc->mesh];
+
+        if (mesh->index_count > 0) {
+            vkCmdDrawIndexed(cmd,
+                             mesh->index_count,
+                             dc->instance_count,
+                             mesh->first_index,
+                             (i32)mesh->first_vertex,
+                             dc->instance_offset);
+        } else {
+            vkCmdDraw(cmd,
+                      mesh->vertex_count,
+                      dc->instance_count,
+                      mesh->first_vertex,
+                      dc->instance_offset);
+        }
+    }
+
+    vkCmdEndRenderPass(cmd);
+}
+
+/* --------------------------------------------------------------------------
  * Command buffer recording
  * ------------------------------------------------------------------------ */
 
@@ -188,6 +269,9 @@ static EngineResult record_command_buffer(Renderer *renderer, VkCommandBuffer cm
         LOG_ERROR("Failed to begin recording command buffer");
         return ENGINE_ERROR_VULKAN_INIT;
     }
+
+    /* Shadow pass (depth from light's perspective, before scene) */
+    record_shadow_pass(vk, cmd);
 
     if (vk->bloom.enabled) {
         /* ================================================================
@@ -464,6 +548,9 @@ EngineResult renderer_create(Window *window, const RendererConfig *config,
         vkUpdateDescriptorSets(r->vk.device, 1, &write, 0, NULL);
     }
 
+    /* ---- Shadow mapping (must be before 3D pipeline — provides desc set layout for set 2) ---- */
+    if ((res = vk_create_shadow_resources(&r->vk)) != ENGINE_SUCCESS) goto fail;
+
     /* ---- 3D pipeline and buffers ---- */
     if ((res = vk_create_3d_pipeline(&r->vk)) != ENGINE_SUCCESS) goto fail;
     if ((res = vk_create_vertex_buffer_3d(&r->vk, MAX_VERTICES_3D)) != ENGINE_SUCCESS) goto fail;
@@ -489,9 +576,9 @@ EngineResult renderer_create(Window *window, const RendererConfig *config,
         }
     }
 
-    /* Light UBO (std140 layout, 80 bytes, persistently mapped) */
+    /* Light UBO (std140 layout, 144 bytes: 5×vec4 + mat4, persistently mapped) */
     {
-        VkDeviceSize ubo_size = 80;
+        VkDeviceSize ubo_size = 144;
         res = vk_create_buffer(&r->vk, ubo_size,
             VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
@@ -590,6 +677,9 @@ void renderer_destroy(Renderer *renderer) {
         VulkanContext *vk = &renderer->vk;
 
         vkDeviceWaitIdle(vk->device);
+
+        /* Shadow cleanup */
+        vk_destroy_shadow_resources(vk);
 
         /* Bloom cleanup */
         bloom_shutdown(vk);
@@ -952,13 +1042,43 @@ void renderer_set_camera_3d(Renderer *renderer, const Camera3D *camera) {
 void renderer_set_light(Renderer *renderer, const DirectionalLight *light) {
     VulkanContext *vk = &renderer->vk;
 
-    /* std140 layout: each vec3 padded to vec4 (16 bytes) */
+    /* Compute light view-projection matrix for shadow mapping */
+    vec3 light_dir_norm;
+    glm_vec3_copy((float *)light->direction, light_dir_norm);
+    glm_vec3_normalize(light_dir_norm);
+
+    /* Position the light camera opposite to the light direction */
+    vec3 light_pos;
+    glm_vec3_scale(light_dir_norm, -15.0f, light_pos);
+
+    vec3 target = {0.0f, 0.0f, 0.0f};
+    vec3 up     = {0.0f, 1.0f, 0.0f};
+
+    /* Handle degenerate case: if light is straight down, use different up */
+    if (fabsf(light_dir_norm[0]) < 0.001f && fabsf(light_dir_norm[2]) < 0.001f) {
+        up[0] = 0.0f; up[1] = 0.0f; up[2] = 1.0f;
+    }
+
+    mat4 light_view, light_proj, light_vp;
+    glm_lookat(light_pos, target, up, light_view);
+
+    /* Use Vulkan-native depth range [0,1] for shadow map (no Y-flip needed
+     * for offscreen depth-only rendering — consistent with depth buffer). */
+    glm_ortho_rh_zo(-12.0f, 12.0f, -12.0f, 12.0f, 0.1f, 30.0f, light_proj);
+
+    glm_mat4_mul(light_proj, light_view, light_vp);
+
+    /* Store for shadow pass push constant */
+    memcpy(vk->shadow.light_vp, light_vp, 64);
+
+    /* std140 layout: each vec3 padded to vec4 (16 bytes), then mat4 */
     struct {
         f32 direction[4];
         f32 color[4];
         f32 ambient[4];
         f32 view_pos[4];
         f32 shininess[4];
+        f32 light_vp[16];
     } ubo_data = {0};
 
     memcpy(ubo_data.direction, light->direction, sizeof(f32) * 3);
@@ -966,6 +1086,7 @@ void renderer_set_light(Renderer *renderer, const DirectionalLight *light) {
     memcpy(ubo_data.ambient, light->ambient, sizeof(f32) * 3);
     memcpy(ubo_data.view_pos, vk->view_position, sizeof(f32) * 3);
     ubo_data.shininess[0] = light->shininess;
+    memcpy(ubo_data.light_vp, light_vp, 64);
 
     memcpy(vk->light_ubo_mapped, &ubo_data, sizeof(ubo_data));
 }

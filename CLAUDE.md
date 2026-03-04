@@ -60,7 +60,8 @@ ai_game_engine/
 │   │   ├── bloom.h / bloom.c            # Bloom post-processing (80s neon glow)
 │   │   ├── text.h / text.c              # Text rendering (stb_truetype, internal)
 │   │   ├── primitives.h / primitives.c  # Procedural 3D primitives (cube, sphere, cylinder)
-│   │   └── model.h / model.c            # glTF model loading (cgltf)
+│   │   ├── model.h / model.c            # glTF model loading (cgltf)
+│   │   └── stb_impl.c                   # STB implementation (stb_image + stb_truetype compiled here)
 │   ├── audio/             # Audio subsystem (miniaudio)
 │   │   └── audio.h / audio.c
 │   └── gameplay/          # Gameplay utilities (collision, particles)
@@ -93,7 +94,10 @@ ai_game_engine/
 │   ├── explosion.wav      # Noise-burst explosion (400ms)
 │   ├── menu_song.wav      # Background music track
 │   ├── duck.glb           # Khronos Duck sample model (glTF binary)
-│   └── box.glb            # Khronos Box sample model (glTF binary)
+│   ├── box.glb            # Khronos Box sample model (glTF binary)
+│   ├── suzanne.glb        # Blender Suzanne monkey head (glTF binary)
+│   ├── shmup_screenshot.png   # Screenshot for README
+│   └── 3d_models.png          # Screenshot for README
 ├── tools/                 # Standalone utilities
 │   └── gen_sounds.c       # Procedural WAV generator
 └── third_party/           # Vendored header-only libs

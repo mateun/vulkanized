@@ -10,6 +10,7 @@
 #define MAX_DRAW_COMMANDS    256
 #define MAX_VERTICES_3D      65536
 #define MAX_INDICES          131072
+#define SHADOW_MAP_SIZE      2048
 
 /* ---- Texture handle ---- */
 
@@ -102,6 +103,28 @@ typedef struct {
     VkExtent2D     bloom_extent; /* half-res */
     bool           enabled;
 } BloomContext;
+
+/* ---- Shadow mapping context ---- */
+
+typedef struct {
+    VkImage        depth_image;
+    VkDeviceMemory depth_memory;
+    VkImageView    depth_view;
+    VkSampler      depth_sampler;       /* comparison sampler for PCF */
+
+    VkRenderPass   render_pass;         /* depth-only render pass */
+    VkFramebuffer  framebuffer;
+
+    VkPipelineLayout pipeline_layout;
+    VkPipeline       pipeline;          /* depth-only pipeline */
+
+    /* Descriptor for sampling shadow map in mesh3d.frag (set 2) */
+    VkDescriptorSetLayout desc_set_layout;
+    VkDescriptorPool      desc_pool;
+    VkDescriptorSet       desc_set;
+
+    float          light_vp[16];        /* light view-projection matrix */
+} ShadowContext;
 
 /* ---- Main Vulkan context ---- */
 
@@ -228,6 +251,9 @@ typedef struct VulkanContext {
 
     /* Cached camera position (for specular lighting) */
     float                    view_position[3];
+
+    /* Shadow mapping */
+    ShadowContext            shadow;
 
     /* Bloom post-processing */
     BloomContext             bloom;
