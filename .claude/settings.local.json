@@ -24,7 +24,10 @@
       "Bash(osascript:*)",
       "Bash(source:*)",
       "mcp__fetch__fetch",
-      "Bash(wc -l /Users/gru/dev/vulkanized/src/**/*.c /Users/gru/dev/vulkanized/src/**/*.h /Users/gru/dev/vulkanized/sample_games/*/main.c /Users/gru/dev/vulkanized/CMakeLists.txt /Users/gru/dev/vulkanized/sample_games/*/CMakeLists.txt)"
+      "Bash(wc -l /Users/gru/dev/vulkanized/src/**/*.c /Users/gru/dev/vulkanized/src/**/*.h /Users/gru/dev/vulkanized/sample_games/*/main.c /Users/gru/dev/vulkanized/CMakeLists.txt /Users/gru/dev/vulkanized/sample_games/*/CMakeLists.txt)",
+      "WebFetch(domain:github.com)",
+      "Bash(start:*)",
+      "Bash(cmd /c \"cd /d F:\\\\dev\\\\c\\\\ai_game_engine\\\\build\\\\sample_games\\\\anim_demo\\\\Debug && start anim_demo.exe\")"
     ]
   }
 }

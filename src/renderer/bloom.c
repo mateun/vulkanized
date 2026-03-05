@@ -1007,6 +1007,7 @@ EngineResult bloom_init(VulkanContext *vk) {
     if ((res = create_postprocess_pipelines(vk))    != ENGINE_SUCCESS) return res;
     if ((res = vk_create_bloom_scene_pipelines(vk)) != ENGINE_SUCCESS) return res;
     if ((res = vk_create_bloom_scene_3d_pipeline(vk)) != ENGINE_SUCCESS) return res;
+    if ((res = vk_create_bloom_scene_skinned_3d_pipeline(vk)) != ENGINE_SUCCESS) return res;
     if ((res = create_size_dependent_resources(vk)) != ENGINE_SUCCESS) return res;
 
     LOG_INFO("Bloom post-processing initialized");
@@ -1030,6 +1031,7 @@ void bloom_shutdown(VulkanContext *vk) {
     if (b->scene_graphics_pipeline)   vkDestroyPipeline(vk->device, b->scene_graphics_pipeline, NULL);
     if (b->scene_text_pipeline)       vkDestroyPipeline(vk->device, b->scene_text_pipeline, NULL);
     if (b->scene_3d_pipeline)         vkDestroyPipeline(vk->device, b->scene_3d_pipeline, NULL);
+    if (b->scene_skinned_pipeline)    vkDestroyPipeline(vk->device, b->scene_skinned_pipeline, NULL);
 
     /* Descriptors */
     if (b->desc_pool)                 vkDestroyDescriptorPool(vk->device, b->desc_pool, NULL);

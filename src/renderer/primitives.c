@@ -363,8 +363,6 @@ EngineResult renderer_create_ground(Renderer *renderer,
     f32 half_z = size_z * 0.5f;
     u32 vi = 0;
 
-    f32 step_x = size_x / (f32)subdivs_x;
-    f32 step_z = size_z / (f32)subdivs_z;
     f32 eps = 0.01f;  /* finite-difference epsilon for normal estimation */
 
     for (u32 rz = 0; rz < rows; rz++) {

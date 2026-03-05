@@ -51,6 +51,12 @@ set(ENGINE_SOURCES
     src/renderer/bloom.c
     src/renderer/primitives.c
     src/renderer/model.c
+    src/renderer/skinned_model.c
+    src/renderer/animation.c
+    src/renderer/anim_blend.c
+    src/renderer/anim_blend_space.c
+    src/renderer/anim_bone_mask.c
+    src/renderer/anim_graph.c
     src/renderer/stb_impl.c
     src/gameplay/collision.c
     src/gameplay/particles.c
@@ -145,3 +151,4 @@ add_custom_target(shaders ALL DEPENDS ${SHADER_OUTPUTS})
 
 add_subdirectory(sample_games/shmup)
 add_subdirectory(sample_games/cube_demo)
+add_subdirectory(sample_games/anim_demo)
